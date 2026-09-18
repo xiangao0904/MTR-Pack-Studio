@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, MoreHorizontal, Plus, Search, Settings2, TrainFront, X } from '@lucide/vue'
 import { t } from './i18n'
-import { createProject, loadRecentProjects, openProject, removeRecentProject, type ProjectSummary } from './lib/projects'
+import { chooseParentDirectory, createProject, loadRecentProjects, openProject, removeRecentProject, type ProjectSummary } from './lib/projects'
 
 type Page = 'home' | 'recent' | 'all'
 const page = ref<Page>('home')
@@ -24,6 +24,10 @@ function showError(error: unknown) { notice.value = error instanceof Error ? err
 async function chooseProject() {
   try { busy.value = true; const project = await openProject(); if (project) { activeProject.value = project; await refreshProjects() } }
   catch (error) { showError(error) } finally { busy.value = false }
+}
+async function chooseParent() {
+  try { const folder = await chooseParentDirectory(); if (folder) projectParent.value = folder }
+  catch (error) { showError(error) }
 }
 async function submitProject() {
   if (!projectName.value.trim()) return
@@ -73,7 +77,7 @@ function dateLabel(timestamp: number) {
       </div><footer class="statusbar"><span><Info :size="17" />{{ t('tip') }}</span><span>✦ &nbsp; {{ t('footerCredit') }}</span></footer></main>
     </div>
     <main v-else class="workspace"><button class="back-link" @click="activeProject = null">← {{ t('back') }}</button><div class="workspace-card"><TrainFront :size="43" /><span class="eyebrow">{{ t('packEyebrow') }}</span><h1>{{ activeProject.name }}</h1><p>{{ activeProject.path }}</p><hr /><h2>{{ t('trains') }}</h2><p>{{ t('coming') }}</p></div></main>
-    <div v-if="creating" class="modal-scrim" @click.self="creating = false"><form class="create-modal" @submit.prevent="submitProject"><div class="modal-head"><div><span class="eyebrow">{{ t('packEyebrow') }}</span><h2>{{ t('create') }}</h2></div><button type="button" class="close-button" @click="creating = false"><X :size="20" /></button></div><label>{{ t('name') }}<input v-model="projectName" autofocus maxlength="80" :placeholder="t('newPlaceholder')" /></label><label>{{ t('parent') }}<input v-model="projectParent" :placeholder="t('parentHint')" /></label><p>{{ t('newFolderHint') }}</p><div class="modal-actions"><button type="button" class="cancel-button" @click="creating = false">{{ t('cancel') }}</button><button class="create-button" type="submit" :disabled="busy || !projectName.trim()">{{ t('create') }}</button></div></form></div>
+    <div v-if="creating" class="modal-scrim" @click.self="creating = false"><form class="create-modal" @submit.prevent="submitProject"><div class="modal-head"><div><span class="eyebrow">{{ t('packEyebrow') }}</span><h2>{{ t('create') }}</h2></div><button type="button" class="close-button" @click="creating = false"><X :size="20" /></button></div><label>{{ t('name') }}<input v-model="projectName" autofocus maxlength="80" :placeholder="t('newPlaceholder')" /></label><label>{{ t('parent') }}<span class="folder-field"><input v-model="projectParent" :placeholder="t('parentHint')" /><button type="button" @click="chooseParent">{{ t('browse') }}</button></span></label><p>{{ t('newFolderHint') }}</p><div class="modal-actions"><button type="button" class="cancel-button" @click="creating = false">{{ t('cancel') }}</button><button class="create-button" type="submit" :disabled="busy || !projectName.trim()">{{ t('create') }}</button></div></form></div>
     <div v-if="notice" class="toast" role="alert">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
   </div>
 </template>

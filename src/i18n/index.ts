@@ -12,6 +12,7 @@ const en = {
   gridView: 'Grid view', listView: 'List view', more: 'More options', trySearch: 'Try another name or path.', today: 'Today',
   productTagline: 'Build · Design · For MTRmod', productSubline: 'For a richer railway in Minecraft.', footerCredit: 'Create More Possibilities · With MTRmod',
   newPlaceholder: 'My Train Pack', newFolderHint: 'A new project folder will be created at this location.',
+  browse: 'Browse',
 } as const
 export type MessageKey = keyof typeof en
 export const t = (key: MessageKey) => en[key]

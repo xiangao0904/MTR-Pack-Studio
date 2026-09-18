@@ -19,6 +19,10 @@ export async function createProject(name: string, parent: string): Promise<Proje
   rememberBrowser(project)
   return project
 }
+export async function chooseParentDirectory(): Promise<string | null> {
+  if (!inTauri()) throw new Error('Choosing local folders requires the desktop app.')
+  return open({ directory: true, multiple: false, title: 'Choose a parent folder' })
+}
 export async function openProject(path?: string): Promise<ProjectSummary | null> {
   if (inTauri()) {
     const selected = path ?? await open({ directory: true, multiple: false, title: 'Open MTR Pack Studio Project' })
