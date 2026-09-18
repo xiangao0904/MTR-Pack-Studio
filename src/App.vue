@@ -64,7 +64,7 @@ function dateLabel(timestamp: number) {
         <div class="nav-rule"></div>
         <button :class="['nav-item', { selected: page === 'recent' }]" @click="page = 'recent'"><Clock3 :size="22" />{{ t('recentProjects') }}</button>
         <button :class="['nav-item', { selected: page === 'all' }]" @click="page = 'all'"><List :size="22" />{{ t('allProjects') }}</button>
-      </nav><div class="sidebar-bottom"><TrainFront class="train-watermark" :size="175" :stroke-width="0.8" /><strong>MTR Pack Studio</strong><span>{{ t('productSubline') }}</span><small>v0.1.0 &nbsp; Beta</small></div></aside>
+      </nav><div class="sidebar-bottom"><img class="train-watermark" src="/images/sidebar-train.svg" alt="" aria-hidden="true" /><strong>MTR Pack Studio</strong><span>{{ t('productSubline') }}</span><small>v0.1.0 &nbsp; Beta</small></div></aside>
       <main class="main-panel"><div class="hero-image"></div><div class="main-scroll">
         <section v-if="page === 'home'" class="welcome"><span class="eyebrow">{{ t('workspaceEyebrow') }}</span><h1>{{ t('welcome') }}</h1><p>{{ t('subtitle') }}</p><div class="quick-actions">
           <button class="quick-card primary" @click="creating = true"><Plus :size="36" /><span><strong>{{ t('newProject') }}</strong><small>{{ t('newHint') }}</small></span><ArrowRight class="quick-arrow" :size="21" /></button>

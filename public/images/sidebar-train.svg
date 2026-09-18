@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 347 400" fill="none">
+  <defs>
+    <linearGradient id="body" x1="192" y1="105" x2="83" y2="371" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#353c41"/>
+      <stop offset="1" stop-color="#272e32"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="225" y1="113" x2="232" y2="295" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1c2226"/>
+      <stop offset="1" stop-color="#1b2023"/>
+    </linearGradient>
+    <linearGradient id="fade" x1="0" y1="65" x2="0" y2="434" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity=".6"/>
+      <stop offset=".32" stop-color="white"/>
+      <stop offset=".75" stop-color="white"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="scene-fade"><path fill="url(#fade)" d="M0 40h347v400H0z"/></mask>
+  </defs>
+  <g mask="url(#scene-fade)">
+    <!-- Rails converge toward the cropped rear of the carriage. -->
+    <path d="m-56 364 424 78M-51 346l414 70" stroke="#343b40" stroke-width="7"/>
+    <path d="m-30 377 118-4m-34 21 111-6m-9 23 108-7m-18 27 108-9" stroke="#282f34" stroke-width="8"/>
+    <!-- Underframe, suspension and wheels. -->
+    <path d="m-32 316 193 10 105 1-1 32-42 12-47 20-51-43-157-13Z" fill="#20262a"/>
+    <g fill="#1a2024" stroke="#2c3338" stroke-width="5">
+      <path d="M25 335c-12 0-15 34-1 43 10 6 23-1 24-13l-4-27Z"/>
+      <path d="M175 350c-17 0-22 36-7 44 14 8 30 0 31-16l-4-24Z"/>
+      <path d="M197 349c-13 1-18 35-5 42 11 7 22-3 22-17l-4-23Z"/>
+    </g>
+    <path d="m-17 341 135 10 39 35 18 1v-13l-11-2-40-33-141-10Z" fill="#333a3f"/>
+    <path d="m55 348 29 3 3 27-30-4Zm41 7 17 1 22 22-37-4Z" stroke="#30373c" stroke-width="2"/>
+    <path d="M155 331h42v22h-42zm78 3h34v25h-34z" fill="#343b40"/>
+    <path d="M244 344h11v13h-11zM28 341h14v22H28z" fill="#22292d"/>
+    <path d="m194 354 8 9 13 1 6 6 29-2 6-8" stroke="#3b4247" stroke-width="6"/>
+    <!-- The side body continues beyond the left edge. -->
+    <path d="m-54 130 170-47c40-11 62-10 83-1 38 16 71 50 85 87l25 123 5 10v25l-147 1-221-17Z" fill="url(#body)"/>
+    <path d="m-42 128 159-42c43-12 66-9 87 2 36 19 61 46 75 79l25 127-121-1-20-123c-5-37-17-61-42-64-29-4-66 11-163 38Z" fill="#20262a"/>
+    <path d="m-33 125 150-41c38-10 60-9 80-2 40 16 69 46 84 80" stroke="#3c4348" stroke-width="3"/>
+    <path d="m-18 138 81-22 25-6-27 27-79 21Z" fill="#2e363b"/>
+    <path d="m-35 169 131-36c26-8 42 1 49 33l15 108-36-16-159 4Z" fill="#1c2327"/>
+    <!-- Recessed passenger doors and windows follow the side perspective. -->
+    <path d="m-19 186 34-9v77l-34 2Zm69-16 47-9 1 89-48 3Z" fill="#343c41"/>
+    <path d="m-10 197 17-4v53l-17 1Zm69-11 29-6 1 59-30 3Z" fill="#1b2226"/>
+    <path d="m-19 178 35-9v145l-35-2Zm68-17 49-11 1 166-49-2Z" stroke="#30383d" stroke-width="2"/>
+    <path d="m-33 264 158-7 36 16 3 20-41-17-156 2Z" fill="#343b40"/>
+    <path d="m-34 311 192 8v9l-192-11Z" fill="#3a4247"/>
+    <path d="m-28 284 42-1v29m5-29 27-1v32m8-32 40-1v34" stroke="#2e363b" stroke-width="2"/>
+    <!-- Curved cab glazing and its thick swept-back pillars. -->
+    <path d="M158 115c-6-14-15-23-26-28 23-8 45-7 64 1 35 16 63 43 76 76l26 120c1 6-2 10-8 10l-97-1c-6 0-9-4-10-10l-20-124c-3-18-5-33-5-44Z" fill="url(#glass)"/>
+    <path d="m174 138 21 1 3 11-24-1-3-8Zm2 26 27 1 14 90-27-1Z" fill="#363e43"/>
+    <path d="m255 140 9 7 5 12-10-5Zm8 29 10 3 18 85-10 1Z" fill="#323a3f"/>
+    <g fill="#3a4248">
+      <ellipse cx="198" cy="277" rx="6.5" ry="8" transform="rotate(-8 198 277)"/>
+      <ellipse cx="212" cy="278" rx="6" ry="8" transform="rotate(-8 212 278)"/>
+      <ellipse cx="283" cy="278" rx="3.5" ry="7" transform="rotate(-8 283 278)"/>
+      <ellipse cx="291" cy="278" rx="3" ry="7" transform="rotate(-8 291 278)"/>
+    </g>
+    <path d="m164 291 17 10 119 1 8-9 6 9v25H157v-25Z" fill="#333b40"/>
+  </g>
+</svg>
