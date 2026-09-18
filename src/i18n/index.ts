@@ -13,6 +13,7 @@ const en = {
   productTagline: 'Build · Design · For MTRmod', productSubline: 'For a richer railway in Minecraft.', footerCredit: 'Create More Possibilities · With MTRmod',
   newPlaceholder: 'My Train Pack', newFolderHint: 'A new project folder will be created at this location.',
   browse: 'Browse',
+  minimize: 'Minimize', maximize: 'Maximize or restore', close: 'Close',
 } as const
 export type MessageKey = keyof typeof en
 export const t = (key: MessageKey) => en[key]

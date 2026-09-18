@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "title": "MTR Pack Studio", "width": 1440, "height": 900, "minWidth": 900, "minHeight": 650 }],
+    "windows": [{ "title": "MTR Pack Studio", "width": 1440, "height": 900, "minWidth": 900, "minHeight": 650, "decorations": false }],
     "security": { "csp": null }
   },
   "bundle": { "active": true, "targets": "all" }
