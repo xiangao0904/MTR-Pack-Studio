@@ -1,0 +1,79 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, MoreHorizontal, Plus, Search, Settings2, TrainFront, X } from '@lucide/vue'
+import { t } from './i18n'
+import { createProject, loadRecentProjects, openProject, removeRecentProject, type ProjectSummary } from './lib/projects'
+
+type Page = 'home' | 'recent' | 'all'
+const page = ref<Page>('home')
+const view = ref<'list' | 'grid'>('list')
+const projects = ref<ProjectSummary[]>([])
+const query = ref('')
+const creating = ref(false)
+const projectName = ref('')
+const projectParent = ref('')
+const busy = ref(false)
+const notice = ref('')
+const menuFor = ref<string | null>(null)
+const activeProject = ref<ProjectSummary | null>(null)
+const filteredProjects = computed(() => projects.value.filter(project => `${project.name} ${project.path}`.toLowerCase().includes(query.value.toLowerCase())))
+
+onMounted(refreshProjects)
+async function refreshProjects() { try { projects.value = await loadRecentProjects() } catch (error) { showError(error) } }
+function showError(error: unknown) { notice.value = error instanceof Error ? error.message : String(error) }
+async function chooseProject() {
+  try { busy.value = true; const project = await openProject(); if (project) { activeProject.value = project; await refreshProjects() } }
+  catch (error) { showError(error) } finally { busy.value = false }
+}
+async function submitProject() {
+  if (!projectName.value.trim()) return
+  try {
+    busy.value = true
+    activeProject.value = await createProject(projectName.value.trim(), projectParent.value.trim())
+    creating.value = false; projectName.value = ''; projectParent.value = ''
+    await refreshProjects()
+  } catch (error) { showError(error) } finally { busy.value = false }
+}
+async function reopenProject(project: ProjectSummary) {
+  try { activeProject.value = await openProject(project.path); await refreshProjects() } catch (error) { showError(error) }
+}
+async function forgetProject(path: string) {
+  try { await removeRecentProject(path); menuFor.value = null; await refreshProjects() } catch (error) { showError(error) }
+}
+function dateLabel(timestamp: number) {
+  const date = new Date(timestamp)
+  return date.toDateString() === new Date().toDateString() ? t('today') : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+</script>
+
+<template>
+  <div class="app-shell">
+    <header class="titlebar">
+      <div class="brand-mark">M</div><div class="brand-copy"><div class="brand-name">MTR Pack Studio <span class="beta">Beta</span></div><div class="brand-tagline">{{ t('productTagline') }}</div></div>
+      <div class="titlebar-actions"><button @click="notice = t('settingsLater')"><Settings2 :size="19" />{{ t('settings') }}</button><button @click="notice = t('helpLater')"><HelpCircle :size="19" />{{ t('help') }}</button></div>
+    </header>
+    <div v-if="!activeProject" class="body-shell">
+      <aside class="sidebar"><nav aria-label="Main navigation">
+        <button :class="['nav-item', { selected: page === 'home' }]" @click="page = 'home'"><Home :size="22" fill="currentColor" />{{ t('home') }}</button>
+        <button class="nav-item" @click="creating = true"><Plus :size="24" />{{ t('newProject') }}</button>
+        <button class="nav-item" @click="chooseProject"><Folder :size="22" />{{ t('openProject') }}</button>
+        <div class="nav-rule"></div>
+        <button :class="['nav-item', { selected: page === 'recent' }]" @click="page = 'recent'"><Clock3 :size="22" />{{ t('recentProjects') }}</button>
+        <button :class="['nav-item', { selected: page === 'all' }]" @click="page = 'all'"><List :size="22" />{{ t('allProjects') }}</button>
+      </nav><div class="sidebar-bottom"><TrainFront class="train-watermark" :size="175" :stroke-width="0.8" /><strong>MTR Pack Studio</strong><span>{{ t('productSubline') }}</span><small>v0.1.0 &nbsp; Beta</small></div></aside>
+      <main class="main-panel"><div class="hero-image"></div><div class="main-scroll">
+        <section v-if="page === 'home'" class="welcome"><span class="eyebrow">{{ t('workspaceEyebrow') }}</span><h1>{{ t('welcome') }}</h1><p>{{ t('subtitle') }}</p><div class="quick-actions">
+          <button class="quick-card primary" @click="creating = true"><Plus :size="36" /><span><strong>{{ t('newProject') }}</strong><small>{{ t('newHint') }}</small></span><ArrowRight class="quick-arrow" :size="21" /></button>
+          <button class="quick-card secondary" @click="chooseProject"><Folder :size="33" /><span><strong>{{ t('openProject') }}</strong><small>{{ t('openHint') }}</small></span><ArrowRight class="quick-arrow" :size="21" /></button>
+        </div></section>
+        <section class="projects-section"><div class="section-heading"><div><span class="eyebrow">{{ page === 'all' ? t('libraryEyebrow') : t('recentEyebrow') }}</span><h2>{{ page === 'all' ? t('allProjects') : t('recentProjects') }}</h2></div><div class="section-tools"><label class="search-box"><Search :size="18" /><input v-model="query" :placeholder="t('search')" /></label><div class="view-toggle"><button :class="{ active: view === 'grid' }" :aria-label="t('gridView')" @click="view = 'grid'"><Grid2X2 :size="19" /></button><button :class="{ active: view === 'list' }" :aria-label="t('listView')" @click="view = 'list'"><List :size="20" /></button></div></div></div>
+          <div v-if="filteredProjects.length" :class="['project-collection', view]"><div v-if="view === 'list'" class="list-header"><span>{{ t('name') }}</span><span>{{ t('lastOpened') }}</span><span>{{ t('location') }}</span></div><div v-for="project in filteredProjects" :key="project.path" class="project-row" @click="reopenProject(project)"><div class="project-identity"><div class="project-thumb"><TrainFront :size="27" /></div><div><strong>{{ project.name }}</strong><small>{{ t('pack') }}</small></div></div><span class="project-date">{{ dateLabel(project.lastOpened) }}</span><span class="project-path" :title="project.path">{{ project.path }}</span><div class="row-menu"><button :aria-label="t('more')" @click.stop="menuFor = menuFor === project.path ? null : project.path"><MoreHorizontal :size="20" /></button><div v-if="menuFor === project.path" class="menu-popover"><button @click.stop="forgetProject(project.path)">{{ t('remove') }}</button></div></div></div></div>
+          <div v-else class="empty-projects"><FolderOpen :size="36" :stroke-width="1.4" /><strong>{{ query ? t('noMatches') : t('empty') }}</strong><span>{{ query ? t('trySearch') : t('emptyHint') }}</span></div>
+        </section><button class="drop-zone" @click="chooseProject"><Folder :size="31" /><span><strong>{{ t('drop') }}</strong><small>{{ t('dropHint') }}</small></span></button>
+      </div><footer class="statusbar"><span><Info :size="17" />{{ t('tip') }}</span><span>✦ &nbsp; {{ t('footerCredit') }}</span></footer></main>
+    </div>
+    <main v-else class="workspace"><button class="back-link" @click="activeProject = null">← {{ t('back') }}</button><div class="workspace-card"><TrainFront :size="43" /><span class="eyebrow">{{ t('packEyebrow') }}</span><h1>{{ activeProject.name }}</h1><p>{{ activeProject.path }}</p><hr /><h2>{{ t('trains') }}</h2><p>{{ t('coming') }}</p></div></main>
+    <div v-if="creating" class="modal-scrim" @click.self="creating = false"><form class="create-modal" @submit.prevent="submitProject"><div class="modal-head"><div><span class="eyebrow">{{ t('packEyebrow') }}</span><h2>{{ t('create') }}</h2></div><button type="button" class="close-button" @click="creating = false"><X :size="20" /></button></div><label>{{ t('name') }}<input v-model="projectName" autofocus maxlength="80" :placeholder="t('newPlaceholder')" /></label><label>{{ t('parent') }}<input v-model="projectParent" :placeholder="t('parentHint')" /></label><p>{{ t('newFolderHint') }}</p><div class="modal-actions"><button type="button" class="cancel-button" @click="creating = false">{{ t('cancel') }}</button><button class="create-button" type="submit" :disabled="busy || !projectName.trim()">{{ t('create') }}</button></div></form></div>
+    <div v-if="notice" class="toast" role="alert">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
+  </div>
+</template>
