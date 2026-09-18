@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, Minus, MoreHorizontal, Plus, Search, Settings2, Square, TrainFront, X } from '@lucide/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { t } from './i18n'
+import WorkspacePreview from './components/WorkspacePreview.vue'
 import { chooseParentDirectory, createProject, loadRecentProjects, openProject, removeRecentProject, type ProjectSummary } from './lib/projects'
 
 type Page = 'home' | 'recent' | 'all'
@@ -17,6 +18,7 @@ const busy = ref(false)
 const notice = ref('')
 const menuFor = ref<string | null>(null)
 const activeProject = ref<ProjectSummary | null>(null)
+const workspacePreview = new URLSearchParams(window.location.search).has('workspace-preview')
 const filteredProjects = computed(() => projects.value.filter(project => `${project.name} ${project.path}`.toLowerCase().includes(query.value.toLowerCase())))
 
 onMounted(refreshProjects)
@@ -69,7 +71,8 @@ function dateLabel(timestamp: number) {
       <div class="brand-mark">M</div><div class="brand-copy"><div class="brand-name">MTR Pack Studio <span class="beta">Beta</span></div><div class="brand-tagline">{{ t('productTagline') }}</div></div>
       <div class="titlebar-actions"><button class="utility-action" @click="notice = t('settingsLater')"><Settings2 :size="19" />{{ t('settings') }}</button><button class="utility-action" @click="notice = t('helpLater')"><HelpCircle :size="19" />{{ t('help') }}</button><span class="titlebar-divider" aria-hidden="true"></span><button class="window-control" :aria-label="t('minimize')" :title="t('minimize')" @click="windowAction('minimize')"><Minus :size="19" /></button><button class="window-control" :aria-label="t('maximize')" :title="t('maximize')" @click="windowAction('toggleMaximize')"><Square :size="16" /></button><button class="window-control close-control" :aria-label="t('close')" :title="t('close')" @click="windowAction('close')"><X :size="20" /></button></div>
     </header>
-    <div v-if="!activeProject" class="body-shell">
+    <WorkspacePreview v-if="workspacePreview" />
+    <div v-else-if="!activeProject" class="body-shell">
       <aside class="sidebar"><nav aria-label="Main navigation">
         <button :class="['nav-item', { selected: page === 'home' }]" @click="page = 'home'"><Home :size="22" fill="currentColor" />{{ t('home') }}</button>
         <button class="nav-item" @click="creating = true"><Plus :size="24" />{{ t('newProject') }}</button>

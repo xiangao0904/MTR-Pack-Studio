@@ -14,6 +14,19 @@ const en = {
   newPlaceholder: 'My Train Pack', newFolderHint: 'A new project folder will be created at this location.',
   browse: 'Browse',
   minimize: 'Minimize', maximize: 'Maximize or restore', close: 'Close',
+  previewLabel: 'WORKSPACE PREVIEW', previewNote: 'Sample content for layout review', previewProject: 'Urban Rail Collection',
+  overview: 'Overview', content: 'Content', allContent: 'All Content', decorativeObjects: 'Decorative Objects', pids: 'PIDS', assets: 'Asset Library', projectSettings: 'Project Settings',
+  planned: 'Planned', availableNow: 'Available now', projectOverview: 'Project overview', overviewSubtitle: 'Everything in your MTR 4 resource pack, in one place.',
+  projectTarget: 'MTR 4 resource pack', totalItems: 'Content items', trainCount: 'Train models', assetCount: 'Source assets',
+  continueWorking: 'Continue working', recentContent: 'Recently edited', viewAll: 'View all', newTrain: 'New train',
+  contentTypes: 'Content types', contentTypesHint: 'Choose a category to browse and manage its items.',
+  draftProject: 'Draft project', projectGroup: 'Project', heroDescription: 'Models, textures, and metadata together in one workspace.', exportPack: 'Export Pack', exportPreview: 'Export will be available when the editor is ready.',
+  searchContent: 'Search content...', type: 'Type', modified: 'Modified', actions: 'Actions',
+  trainsDescription: 'Vehicles and carriage definitions', decorativeDescription: 'Station and trackside details', pidsDescription: 'Passenger information displays',
+  sampleTrainA: 'Harbour Line A-Type', sampleTrainB: 'Airport Express', sampleTrainC: 'Metro Test Vehicle',
+  sampleTrainAInfo: '3 carriages · Work in progress', sampleTrainBInfo: '2 carriages · Work in progress', sampleTrainCInfo: '1 carriage · Draft',
+  sampleToday: 'Today', sampleYesterday: 'Yesterday', sampleEarlier: 'Sep 16',
+  upcomingMessage: 'This category is planned for a later release.', trainEditorUpcoming: 'The train editor is the next step after this workspace design.',
 } as const
 export type MessageKey = keyof typeof en
 export const t = (key: MessageKey) => en[key]
