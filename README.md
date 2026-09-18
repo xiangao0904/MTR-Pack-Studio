@@ -11,14 +11,14 @@ A desktop editor for MTR 4 resource packs. The first milestone provides an Engli
 ## Development
 
 ```sh
-npm install
-npm run tauri dev
+pnpm install
+pnpm tauri dev
 ```
 
-Use `npm run dev` for a browser preview of the interface. Browser preview uses local storage and does not create real project folders. The Tauri app creates projects on disk and tracks recently opened folders in app configuration data.
+Use `pnpm dev` for a browser preview of the interface. Browser preview uses local storage and does not create real project folders. The Tauri app creates projects on disk and tracks recently opened folders in app configuration data.
 
 ```sh
-npm run build
+pnpm build
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
