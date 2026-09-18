@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 
 export interface ProjectSummary { name: string; path: string; lastOpened: number }
+export interface ContentEntry { id: string; kind: string; name: string; file: string; updatedAt: number }
+export interface ProjectData { name: string; target: string; description: string; content: ContentEntry[] }
 const key = 'mtr-pack-studio:recent-projects'
 const inTauri = () => '__TAURI_INTERNALS__' in window
 function browserProjects(): ProjectSummary[] {
@@ -35,4 +37,20 @@ export async function openProject(path?: string): Promise<ProjectSummary | null>
 export async function removeRecentProject(path: string): Promise<void> {
   if (inTauri()) return invoke('remove_recent_project', { path })
   localStorage.setItem(key, JSON.stringify(browserProjects().filter(p => p.path !== path)))
+}
+
+const dataKey = (path: string) => `mtr-pack-studio:project:${path}`
+export async function getProject(path: string): Promise<ProjectData> {
+  if (inTauri()) return invoke<ProjectData>('get_project', { path })
+  const stored = localStorage.getItem(dataKey(path))
+  return stored ? JSON.parse(stored) as ProjectData : { name: browserProjects().find(p => p.path === path)?.name || '', target: 'mtr4', description: '', content: [] }
+}
+export async function createTrain(path: string, name: string): Promise<ContentEntry> {
+  if (inTauri()) return invoke<ContentEntry>('create_train', { path, name })
+  const project = await getProject(path)
+  const id = `train-${Date.now()}`
+  const entry = { id, kind: 'train', name, file: `content/trains/${id}.json`, updatedAt: Date.now() }
+  project.content.push(entry)
+  localStorage.setItem(dataKey(path), JSON.stringify(project))
+  return entry
 }
