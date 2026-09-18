@@ -14,6 +14,19 @@ const en = {
   newPlaceholder: 'My Train Pack', newFolderHint: 'A new project folder will be created at this location.',
   browse: 'Browse',
   minimize: 'Minimize', maximize: 'Maximize or restore', close: 'Close',
+  overview: 'Overview', allContent: 'All Content', decorativeObjects: 'Decorative Objects', pids: 'PIDS', planned: 'Planned',
+  assetLibrary: 'Asset Library', projectSettings: 'Project Settings', exportPack: 'Export Pack', exportLater: 'Pack export is coming in a future release.',
+  projectOverview: 'Project overview', overviewSubtitle: 'Everything in your MTR 4 resource pack, in one place.',
+  projectSummary: 'A local resource pack project for MTR 4.', contentTypes: 'Content types', contentTypesHint: 'Create and manage different types of content for your resource pack.',
+  trainTypeHint: 'Create and edit train models, textures and configuration.', objectTypeHint: 'Station props, trackside items and environmental objects.',
+  pidsTypeHint: 'Passenger information displays and screens.', recentlyEdited: 'Recently edited', recentlyEditedHint: 'Your recently edited content.',
+  viewAll: 'View all', type: 'Type', lastEdited: 'Last edited', newTrain: 'New Train', createTrain: 'Create Train', trainName: 'Train name',
+  trainNamePlaceholder: 'My train', noContent: 'No content yet', noContentHint: 'Create your first train to start building this pack.',
+  noTrains: 'No trains yet', noTrainsHint: 'Create a train to add it to this project.', contentSearch: 'Search content...',
+  plannedHint: 'This content type is planned for a future release.', assetsHint: 'Asset management is coming in a future release.',
+  projectSettingsHint: 'Project settings are coming in a future release.', trainEditorHint: 'The train editor is coming in a future release.',
+  trainsHeading: 'Trains', allContentHeading: 'All content',
+  contentGroup: 'Content', projectGroup: 'Project', projectLabel: 'PROJECT', itemName: 'NAME', itemType: 'TYPE', itemLastEdited: 'LAST EDITED', retry: 'Retry',
 } as const
 export type MessageKey = keyof typeof en
 export const t = (key: MessageKey) => en[key]
