@@ -145,6 +145,8 @@ impl Container {
 
     pub fn path(&self) -> &Path { &self.path }
 
+    pub fn flush(&mut self) -> Result<(), String> { self.file.sync_all().map_err(|e| e.to_string()) }
+
     pub fn put_blob(&mut self, bytes: &[u8], media_type: &str) -> Result<String, String> {
         if bytes.len() as u64 > MAX_OBJECT_SIZE { return Err("Resource is too large for this project format.".into()); }
         let hash = blake3::hash(bytes);
@@ -440,6 +442,25 @@ mod tests {
         file.write_all(&99u16.to_le_bytes()).unwrap();
         drop(file);
         assert!(Container::open(&path).unwrap_err().contains("unsupported container version"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn compaction_keeps_live_content() {
+        let path = test_path("compact");
+        let mut container = Container::create(&path, "Test", "mtr4").unwrap();
+        let hash = container.put_blob(&vec![b'a'; 16_384], "application/json").unwrap();
+        container.commit().unwrap();
+        for index in 0..8 {
+            container.index.description = format!("revision {index}");
+            container.commit().unwrap();
+        }
+        let before = container.file.metadata().unwrap().len();
+        container.compact().unwrap();
+        let after = container.file.metadata().unwrap().len();
+        assert!(after < before);
+        assert_eq!(container.read_blob(&hash).unwrap(), vec![b'a'; 16_384]);
+        assert_eq!(container.index.description, "revision 7");
         fs::remove_file(path).unwrap();
     }
 }

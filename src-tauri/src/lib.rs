@@ -1,74 +1,102 @@
 mod container;
 
+use container::{has_project_magic, is_project_path, Container, ContentEntry};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
-use tauri::{AppHandle, Manager};
-
-const MANIFEST: &str = "mtrpack.project.json";
+use std::{collections::VecDeque, fs, path::{Path, PathBuf}, sync::Mutex, time::{SystemTime, UNIX_EPOCH}};
+use tauri::{AppHandle, Manager, State};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectSummary { name: String, path: String, last_opened: u128 }
+struct ProjectSummary { name: String, path: String, last_opened: u64 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectManifest {
-    schema_version: u32,
+struct ProjectData {
     name: String,
     target: String,
-    #[serde(default)]
     description: String,
-    #[serde(default)]
     content: Vec<ContentEntry>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    trains: Vec<serde_json::Value>,
+    path: String,
+    recovered: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ContentEntry { id: String, kind: String, name: String, file: String, updated_at: u128 }
+struct ProjectSession { container: Container }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProjectData { name: String, target: String, description: String, content: Vec<ContentEntry> }
-
-fn read_manifest(folder: &Path) -> Result<ProjectManifest, String> {
-    let content = fs::read_to_string(folder.join(MANIFEST)).map_err(|_| "This folder does not contain an MTR Pack Studio project.".to_string())?;
-    let manifest: ProjectManifest = serde_json::from_str(&content).map_err(|e| format!("Invalid project manifest: {e}"))?;
-    if !matches!(manifest.schema_version, 1 | 2) { return Err("This project uses an unsupported schema version.".into()); }
-    Ok(manifest)
+#[derive(Default)]
+struct AppState {
+    active: Mutex<Option<ProjectSession>>,
+    pending_paths: Mutex<VecDeque<PathBuf>>,
 }
 
-fn save_manifest(folder: &Path, manifest: &ProjectManifest) -> Result<(), String> {
-    let path = folder.join(MANIFEST);
-    fs::write(path, serde_json::to_vec_pretty(manifest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+fn now_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis().min(u64::MAX as u128) as u64 }
+fn lock_error() -> String { "The project session is unavailable.".into() }
+
+fn project_data(container: &Container) -> ProjectData {
+    ProjectData {
+        name: container.index.name.clone(),
+        target: container.index.target.clone(),
+        description: container.index.description.clone(),
+        content: container.index.content.clone(),
+        path: container.path().to_string_lossy().into_owned(),
+        recovered: container.recovered,
+    }
 }
 
-fn now_ms() -> u128 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() }
+fn project_summary(container: &Container) -> ProjectSummary {
+    ProjectSummary { name: container.index.name.clone(), path: container.path().to_string_lossy().into_owned(), last_opened: now_ms() }
+}
+
+fn validate_project_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) { Err("Enter a project name up to 80 characters.".into()) } else { Ok(name) }
+}
+
 fn recent_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join("recent-projects.json"))
 }
+
+fn save_recent(app: &AppHandle, recent: &[ProjectSummary]) -> Result<(), String> {
+    fs::write(recent_path(app)?, serde_json::to_vec_pretty(recent).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
 fn read_recent(app: &AppHandle) -> Result<Vec<ProjectSummary>, String> {
     let path = recent_path(app)?;
     if !path.exists() { return Ok(Vec::new()); }
-    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&content).map_err(|e| e.to_string())
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut recent: Vec<ProjectSummary> = serde_json::from_str(&content).unwrap_or_default();
+    recent.retain(|item| {
+        let project = Path::new(&item.path);
+        project.is_file() && is_project_path(project) && has_project_magic(project)
+    });
+    recent.truncate(30);
+    save_recent(app, &recent)?;
+    Ok(recent)
 }
-fn save_recent(app: &AppHandle, recent: &[ProjectSummary]) -> Result<(), String> {
-    let path = recent_path(app)?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(recent).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    fs::rename(temporary, path).map_err(|e| e.to_string())
-}
+
 fn remember(app: &AppHandle, project: ProjectSummary) -> Result<ProjectSummary, String> {
     let mut recent = read_recent(app)?;
-    recent.retain(|item| item.path != project.path);
+    recent.retain(|item| !paths_equal(Path::new(&item.path), Path::new(&project.path)));
     recent.insert(0, project.clone());
     recent.truncate(30);
     save_recent(app, &recent)?;
     Ok(project)
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    { left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy()) }
+    #[cfg(not(windows))]
+    { left == right }
+}
+
+fn replace_active(state: &AppState, next: Container) -> Result<ProjectData, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    if let Some(current) = active.as_mut() { current.container.flush()?; }
+    let data = project_data(&next);
+    *active = Some(ProjectSession { container: next });
+    Ok(data)
 }
 
 #[tauri::command]
@@ -77,69 +105,92 @@ fn list_recent_projects(app: AppHandle) -> Result<Vec<ProjectSummary>, String> {
 #[tauri::command]
 fn remove_recent_project(app: AppHandle, path: String) -> Result<(), String> {
     let mut recent = read_recent(&app)?;
-    recent.retain(|item| item.path != path);
+    recent.retain(|item| !paths_equal(Path::new(&item.path), Path::new(&path)));
     save_recent(&app, &recent)
 }
 
 #[tauri::command]
-fn create_project(app: AppHandle, name: String, parent: Option<String>) -> Result<ProjectSummary, String> {
-    let name = name.trim();
-    if name.is_empty() || name == "." || name == ".." || name.chars().any(|c| "<>:\"/\\|?*".contains(c) || c.is_control()) || name.ends_with(['.', ' ']) {
-        return Err("Enter a valid project name without path separators or reserved characters.".into());
+fn create_project(app: AppHandle, state: State<AppState>, path: String, name: String, target: String) -> Result<ProjectData, String> {
+    let name = validate_project_name(&name)?;
+    if target != "mtr4" { return Err("This version can only create MTR 4 projects.".into()); }
+    let container = Container::create(Path::new(&path), name, &target)?;
+    let summary = project_summary(&container);
+    let data = replace_active(&state, container)?;
+    remember(&app, summary)?;
+    Ok(data)
+}
+
+#[tauri::command]
+fn open_project(app: AppHandle, state: State<AppState>, path: String) -> Result<ProjectData, String> {
+    let requested = Path::new(&path);
+    {
+        let mut active = state.active.lock().map_err(|_| lock_error())?;
+        if let Some(current) = active.as_mut() {
+            if paths_equal(current.container.path(), requested) {
+                current.container.flush()?;
+                let data = project_data(&current.container);
+                remember(&app, project_summary(&current.container))?;
+                return Ok(data);
+            }
+        }
     }
-    let parent = match parent.filter(|p| !p.trim().is_empty()) {
-        Some(path) => PathBuf::from(path),
-        None => app.path().document_dir().map_err(|e| e.to_string())?.join("MTR Pack Studio"),
-    };
-    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    let path = parent.join(name);
-    if path.exists() { return Err("A folder with this project name already exists.".into()); }
-    fs::create_dir(&path).map_err(|e| e.to_string())?;
-    let manifest = ProjectManifest { schema_version: 2, name: name.into(), target: "mtr4".into(), description: String::new(), content: Vec::new(), trains: Vec::new() };
-    save_manifest(&path, &manifest)?;
-    fs::create_dir(path.join("assets")).map_err(|e| e.to_string())?;
-    let path = path.canonicalize().map_err(|e| e.to_string())?;
-    remember(&app, ProjectSummary { name: name.into(), path: path.to_string_lossy().into_owned(), last_opened: now_ms() })
+    let container = Container::open(requested)?;
+    let summary = project_summary(&container);
+    let data = replace_active(&state, container)?;
+    remember(&app, summary)?;
+    Ok(data)
 }
 
 #[tauri::command]
-fn open_project(app: AppHandle, path: String) -> Result<ProjectSummary, String> {
-    let folder = Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
-    if !folder.is_dir() { return Err("Choose a project folder.".into()); }
-    let manifest = read_manifest(&folder)?;
-    remember(&app, ProjectSummary { name: manifest.name, path: folder.to_string_lossy().into_owned(), last_opened: now_ms() })
+fn get_active_project(state: State<AppState>) -> Result<Option<ProjectData>, String> {
+    let active = state.active.lock().map_err(|_| lock_error())?;
+    Ok(active.as_ref().map(|session| project_data(&session.container)))
 }
 
 #[tauri::command]
-fn get_project(path: String) -> Result<ProjectData, String> {
-    let folder = Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
-    let manifest = read_manifest(&folder)?;
-    Ok(ProjectData { name: manifest.name, target: manifest.target, description: manifest.description, content: manifest.content })
-}
-
-#[tauri::command]
-fn create_train(path: String, name: String) -> Result<ContentEntry, String> {
+fn create_train(state: State<AppState>, name: String) -> Result<ContentEntry, String> {
     let name = name.trim();
     if name.is_empty() || name.len() > 80 { return Err("Enter a train name up to 80 characters.".into()); }
-    let folder = Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
-    let mut manifest = read_manifest(&folder)?;
-    let id = format!("train-{}-{}", now_ms(), manifest.content.len());
-    let relative = format!("content/trains/{id}.json");
-    let entry = ContentEntry { id, kind: "train".into(), name: name.into(), file: relative.clone(), updated_at: now_ms() };
-    let train_dir = folder.join("content").join("trains");
-    fs::create_dir_all(&train_dir).map_err(|e| e.to_string())?;
-    let train_file = folder.join(&relative);
-    fs::write(&train_file, serde_json::to_vec_pretty(&serde_json::json!({"id": entry.id, "name": entry.name, "model": null, "texture": null, "properties": {}})).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    manifest.content.push(entry.clone());
-    manifest.schema_version = 2;
-    if let Err(error) = save_manifest(&folder, &manifest) { let _ = fs::remove_file(train_file); return Err(error); }
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let session = active.as_mut().ok_or_else(|| "Open a project before creating content.".to_string())?;
+    let previous_index = session.container.index.clone();
+    let id = format!("train-{}-{}", now_ms(), previous_index.content.len());
+    let config = serde_json::to_vec(&serde_json::json!({ "id": id, "name": name, "model": null, "texture": null, "properties": {} })).map_err(|e| e.to_string())?;
+    let resource = session.container.put_blob(&config, "application/json")?;
+    let entry = ContentEntry { id: id.clone(), kind: "train".into(), name: name.into(), file: format!("content/trains/{id}.json"), updated_at: now_ms() as u128, resources: vec![resource] };
+    session.container.index.content.push(entry.clone());
+    if let Err(error) = session.container.commit() {
+        session.container.index = previous_index;
+        return Err(error);
+    }
+    if session.container.should_compact().unwrap_or(false) { let _ = session.container.compact(); }
     Ok(entry)
+}
+
+#[tauri::command]
+fn save_project(state: State<AppState>) -> Result<(), String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    active.as_mut().ok_or_else(|| "No project is open.".to_string())?.container.flush()
+}
+
+#[tauri::command]
+fn close_project(state: State<AppState>) -> Result<(), String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    if let Some(session) = active.as_mut() { session.container.flush()?; }
+    *active = None;
+    Ok(())
+}
+
+#[tauri::command]
+fn take_pending_project_path(state: State<AppState>) -> Result<Option<String>, String> {
+    Ok(state.pending_paths.lock().map_err(|_| lock_error())?.pop_front().map(|path| path.to_string_lossy().into_owned()))
 }
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(AppState::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![list_recent_projects, remove_recent_project, create_project, open_project, get_project, create_train])
+        .invoke_handler(tauri::generate_handler![list_recent_projects, remove_recent_project, create_project, open_project, get_active_project, create_train, save_project, close_project, take_pending_project_path])
         .run(tauri::generate_context!())
         .expect("failed to run MTR Pack Studio");
 }
@@ -149,27 +200,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_one_projects_still_open() {
-        let folder = std::env::temp_dir().join(format!("mtr-pack-studio-v1-{}", now_ms()));
-        fs::create_dir(&folder).unwrap();
-        fs::write(folder.join(MANIFEST), r#"{"schemaVersion":1,"name":"Legacy","target":"mtr4","trains":[]}"#).unwrap();
-        let project = read_manifest(&folder).unwrap();
-        assert_eq!(project.name, "Legacy");
-        assert!(project.content.is_empty());
-        fs::remove_dir_all(folder).unwrap();
-    }
-
-    #[test]
-    fn creating_train_persists_content_index_and_document() {
-        let folder = std::env::temp_dir().join(format!("mtr-pack-studio-train-{}", now_ms()));
-        fs::create_dir(&folder).unwrap();
-        let manifest = ProjectManifest { schema_version: 2, name: "Test".into(), target: "mtr4".into(), description: String::new(), content: Vec::new(), trains: Vec::new() };
-        save_manifest(&folder, &manifest).unwrap();
-        let entry = create_train(folder.to_string_lossy().into_owned(), "Example Train".into()).unwrap();
-        assert!(folder.join(&entry.file).is_file());
-        let reopened = read_manifest(&folder).unwrap();
-        assert_eq!(reopened.content.len(), 1);
-        assert_eq!(reopened.content[0].name, "Example Train");
-        fs::remove_dir_all(folder).unwrap();
+    fn project_name_is_independent_from_file_name() {
+        let path = std::env::temp_dir().join(format!("renamed-{}.mtrpack", now_ms()));
+        let container = Container::create(&path, "Internal Name", "mtr4").unwrap();
+        assert_eq!(container.index.name, "Internal Name");
+        drop(container);
+        let renamed = path.with_file_name(format!("different-{}.mtrpack", now_ms()));
+        fs::rename(&path, &renamed).unwrap();
+        assert_eq!(Container::open(&renamed).unwrap().index.name, "Internal Name");
+        fs::remove_file(renamed).unwrap();
     }
 }
