@@ -8,7 +8,7 @@ const en = {
   create: 'Create Project', cancel: 'Cancel', remove: 'Remove from recent',
   back: 'Back to Home', trains: 'Trains', coming: 'Train editing is the next milestone. Your project is ready to use.',
   settings: 'Settings', help: 'Help', settingsLater: 'Settings are coming in a future release.', helpLater: 'Help is coming in a future release.',
-  workspaceEyebrow: 'YOUR CREATIVE WORKSPACE', libraryEyebrow: 'YOUR LIBRARY', recentEyebrow: 'PICK UP WHERE YOU LEFT OFF', packEyebrow: 'MTR 4 RESOURCE PACK',
+  workspaceEyebrow: 'YOUR CREATIVE WORKSPACE', libraryEyebrow: 'YOUR LIBRARY', recentEyebrow: 'PICK UP WHERE YOU LEFT OFF', packEyebrow: 'MTR RESOURCE PACK PROJECT',
   gridView: 'Grid view', listView: 'List view', more: 'More options', trySearch: 'Try another name or path.', today: 'Today',
   productTagline: 'Build · Design · For MTRmod', productSubline: 'For a richer railway in Minecraft.', footerCredit: 'Create More Possibilities · With MTRmod',
   newPlaceholder: 'My Train Pack', projectFile: 'Project file',
@@ -17,8 +17,8 @@ const en = {
   minimize: 'Minimize', maximize: 'Maximize or restore', close: 'Close',
   overview: 'Overview', allContent: 'All Content', decorativeObjects: 'Decorative Objects', pids: 'PIDS', planned: 'Planned',
   assetLibrary: 'Asset Library', projectSettings: 'Project Settings', exportPack: 'Export Pack', exportLater: 'Pack export is coming in a future release.',
-  projectOverview: 'Project overview', overviewSubtitle: 'Everything in your MTR 4 resource pack, in one place.',
-  projectSummary: 'A local resource pack project for MTR 4.', contentTypes: 'Content types', contentTypesHint: 'Create and manage different types of content for your resource pack.',
+  projectOverview: 'Project overview', overviewSubtitle: 'Everything in your editable MTR resource pack project, in one place.',
+  projectSummary: 'An editable MTR resource pack project.', contentTypes: 'Content types', contentTypesHint: 'Create and manage different types of content for your resource pack.',
   trainTypeHint: 'Create and edit train models, textures and configuration.', objectTypeHint: 'Station props, trackside items and environmental objects.',
   pidsTypeHint: 'Passenger information displays and screens.', recentlyEdited: 'Recently edited', recentlyEditedHint: 'Your recently edited content.',
   viewAll: 'View all', type: 'Type', lastEdited: 'Last edited', newTrain: 'New Train', createTrain: 'Create Train', trainName: 'Train name',
@@ -29,6 +29,11 @@ const en = {
   trainsHeading: 'Trains', allContentHeading: 'All content',
   contentGroup: 'Content', projectGroup: 'Project', projectLabel: 'PROJECT', itemName: 'NAME', itemType: 'TYPE', itemLastEdited: 'LAST EDITED', retry: 'Retry',
   saving: 'Saving…', saved: 'Saved', saveFailed: 'Save failed', recoveredProject: 'The latest incomplete save was skipped. The project was recovered from its last valid checkpoint.',
+  general: 'General', carriages: 'Carriages', models: 'Models & Textures', placement: 'Placement Rules', mtr3Compatibility: 'MTR 3 Compatibility',
+  exportId: 'Export ID', description: 'Description', color: 'Color', tags: 'Tags', length: 'Length', width: 'Width', bogie1: 'Bogie 1', bogie2: 'Bogie 2',
+  endConnections: 'End connections', end1Gangway: 'End 1 gangway', end2Gangway: 'End 2 gangway', end1Barrier: 'End 1 barrier', end2Barrier: 'End 2 barrier',
+  bodyModel: 'Import body model', parts: 'Parts', partPlacement: 'Part placement', carriagePlacement: 'Carriage placement', preset: 'Preset', allCars: 'All cars', firstCar: 'First car', lastCar: 'Last car', oddCars: 'Odd cars', evenCars: 'Even cars', everyCars: 'Every N cars', custom: 'Custom', interval: 'Interval', offset: 'Offset', whitelist: 'Whitelist', blacklist: 'Blacklist',
+  mtr3Hint: 'MTR 3 and NTE use one base train type and position filters to assemble the visible cars.', baseTrainType: 'Base train type', mtr3LengthHint: 'All carriages must use the same length for MTR 3 export.', loading: 'Loading…', missingDependencies: 'Missing model dependencies',
 } as const
 export type MessageKey = keyof typeof en
 export const t = (key: MessageKey) => en[key]

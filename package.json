@@ -11,14 +11,16 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@lucide/vue": "^1.47.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.3",
-    "@lucide/vue": "^1.47.0",
+    "three": "^0.186.0",
     "vue": "^3.5.42"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^24.13.3",
+    "@types/three": "^0.186.0",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.9.1",
     "typescript": "~6.0.2",
