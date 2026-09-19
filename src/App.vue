@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, Minus, MoreHorizontal, Plus, Search, Settings2, Square, TrainFront, X } from '@lucide/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { listen } from '@tauri-apps/api/event'
 import { t } from './i18n'
 import ProjectWorkspace from './components/ProjectWorkspace.vue'
 import { chooseProjectSavePath, closeProject, createProject, loadRecentProjects, openProject, removeRecentProject, saveProject, takePendingProjectPath, type ProjectSummary } from './lib/projects'
@@ -24,6 +25,10 @@ let forceClose = false
 onMounted(async () => {
   await refreshProjects()
   if (isDesktop) {
+    await listen('open-project-file', async () => {
+      const path = await takePendingProjectPath()
+      if (path) await openExternalProject(path)
+    })
     await getCurrentWindow().onCloseRequested(async event => {
       if (forceClose) return
       event.preventDefault()

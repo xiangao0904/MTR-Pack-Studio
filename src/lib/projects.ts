@@ -10,7 +10,7 @@ const inTauri = () => '__TAURI_INTERNALS__' in window
 const dataKey = (path: string) => `mtr-pack-studio:project:${path}`
 
 function browserProjects(): ProjectSummary[] {
-  try { return JSON.parse(localStorage.getItem(recentKey) || '[]') as ProjectSummary[] } catch { return [] }
+  try { return (JSON.parse(localStorage.getItem(recentKey) || '[]') as ProjectSummary[]).filter(project => project.path.toLowerCase().endsWith('.mtrpack')) } catch { return [] }
 }
 function rememberBrowser(project: ProjectSummary) {
   localStorage.setItem(recentKey, JSON.stringify([project, ...browserProjects().filter(item => item.path !== project.path)]))

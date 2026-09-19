@@ -2,12 +2,22 @@ mod container;
 
 use container::{has_project_magic, is_project_path, Container, ContentEntry};
 use serde::{Deserialize, Serialize};
-use std::{collections::VecDeque, fs, path::{Path, PathBuf}, sync::Mutex, time::{SystemTime, UNIX_EPOCH}};
-use tauri::{AppHandle, Manager, State};
+use std::{
+    collections::VecDeque,
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectSummary { name: String, path: String, last_opened: u64 }
+struct ProjectSummary {
+    name: String,
+    path: String,
+    last_opened: u64,
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +30,9 @@ struct ProjectData {
     recovered: bool,
 }
 
-struct ProjectSession { container: Container }
+struct ProjectSession {
+    container: Container,
+}
 
 #[derive(Default)]
 struct AppState {
@@ -28,8 +40,47 @@ struct AppState {
     pending_paths: Mutex<VecDeque<PathBuf>>,
 }
 
-fn now_ms() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis().min(u64::MAX as u128) as u64 }
-fn lock_error() -> String { "The project session is unavailable.".into() }
+fn project_path_from_arguments<I, S>(arguments: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    arguments
+        .into_iter()
+        .map(|value| PathBuf::from(value.as_ref()))
+        .find_map(|path| {
+            if path.is_file() && is_project_path(&path) && has_project_magic(&path) {
+                path.canonicalize().ok()
+            } else {
+                None
+            }
+        })
+}
+
+fn queue_project_path(app: &AppHandle, path: PathBuf) {
+    if let Ok(mut pending) = app.state::<AppState>().pending_paths.lock() {
+        if !pending.iter().any(|queued| paths_equal(queued, &path)) {
+            pending.push_back(path.clone());
+        }
+    }
+    let _ = app.emit("open-project-file", path.to_string_lossy().into_owned());
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+fn lock_error() -> String {
+    "The project session is unavailable.".into()
+}
 
 fn project_data(container: &Container) -> ProjectData {
     ProjectData {
@@ -43,12 +94,20 @@ fn project_data(container: &Container) -> ProjectData {
 }
 
 fn project_summary(container: &Container) -> ProjectSummary {
-    ProjectSummary { name: container.index.name.clone(), path: container.path().to_string_lossy().into_owned(), last_opened: now_ms() }
+    ProjectSummary {
+        name: container.index.name.clone(),
+        path: container.path().to_string_lossy().into_owned(),
+        last_opened: now_ms(),
+    }
 }
 
 fn validate_project_name(name: &str) -> Result<&str, String> {
     let name = name.trim();
-    if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) { Err("Enter a project name up to 80 characters.".into()) } else { Ok(name) }
+    if name.is_empty() || name.len() > 80 || name.chars().any(char::is_control) {
+        Err("Enter a project name up to 80 characters.".into())
+    } else {
+        Ok(name)
+    }
 }
 
 fn recent_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -58,12 +117,18 @@ fn recent_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn save_recent(app: &AppHandle, recent: &[ProjectSummary]) -> Result<(), String> {
-    fs::write(recent_path(app)?, serde_json::to_vec_pretty(recent).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    fs::write(
+        recent_path(app)?,
+        serde_json::to_vec_pretty(recent).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn read_recent(app: &AppHandle) -> Result<Vec<ProjectSummary>, String> {
     let path = recent_path(app)?;
-    if !path.exists() { return Ok(Vec::new()); }
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut recent: Vec<ProjectSummary> = serde_json::from_str(&content).unwrap_or_default();
     recent.retain(|item| {
@@ -86,21 +151,32 @@ fn remember(app: &AppHandle, project: ProjectSummary) -> Result<ProjectSummary, 
 
 fn paths_equal(left: &Path, right: &Path) -> bool {
     #[cfg(windows)]
-    { left.to_string_lossy().eq_ignore_ascii_case(&right.to_string_lossy()) }
+    {
+        let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+        let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
     #[cfg(not(windows))]
-    { left == right }
+    {
+        left == right
+    }
 }
 
 fn replace_active(state: &AppState, next: Container) -> Result<ProjectData, String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?;
-    if let Some(current) = active.as_mut() { current.container.flush()?; }
+    if let Some(current) = active.as_mut() {
+        current.container.flush()?;
+    }
     let data = project_data(&next);
     *active = Some(ProjectSession { container: next });
     Ok(data)
 }
 
 #[tauri::command]
-fn list_recent_projects(app: AppHandle) -> Result<Vec<ProjectSummary>, String> { read_recent(&app) }
+fn list_recent_projects(app: AppHandle) -> Result<Vec<ProjectSummary>, String> {
+    read_recent(&app)
+}
 
 #[tauri::command]
 fn remove_recent_project(app: AppHandle, path: String) -> Result<(), String> {
@@ -110,9 +186,17 @@ fn remove_recent_project(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_project(app: AppHandle, state: State<AppState>, path: String, name: String, target: String) -> Result<ProjectData, String> {
+fn create_project(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+    name: String,
+    target: String,
+) -> Result<ProjectData, String> {
     let name = validate_project_name(&name)?;
-    if target != "mtr4" { return Err("This version can only create MTR 4 projects.".into()); }
+    if target != "mtr4" {
+        return Err("This version can only create MTR 4 projects.".into());
+    }
     let container = Container::create(Path::new(&path), name, &target)?;
     let summary = project_summary(&container);
     let data = replace_active(&state, container)?;
@@ -121,7 +205,11 @@ fn create_project(app: AppHandle, state: State<AppState>, path: String, name: St
 }
 
 #[tauri::command]
-fn open_project(app: AppHandle, state: State<AppState>, path: String) -> Result<ProjectData, String> {
+fn open_project(
+    app: AppHandle,
+    state: State<AppState>,
+    path: String,
+) -> Result<ProjectData, String> {
     let requested = Path::new(&path);
     {
         let mut active = state.active.lock().map_err(|_| lock_error())?;
@@ -144,53 +232,102 @@ fn open_project(app: AppHandle, state: State<AppState>, path: String) -> Result<
 #[tauri::command]
 fn get_active_project(state: State<AppState>) -> Result<Option<ProjectData>, String> {
     let active = state.active.lock().map_err(|_| lock_error())?;
-    Ok(active.as_ref().map(|session| project_data(&session.container)))
+    Ok(active
+        .as_ref()
+        .map(|session| project_data(&session.container)))
 }
 
 #[tauri::command]
 fn create_train(state: State<AppState>, name: String) -> Result<ContentEntry, String> {
     let name = name.trim();
-    if name.is_empty() || name.len() > 80 { return Err("Enter a train name up to 80 characters.".into()); }
+    if name.is_empty() || name.len() > 80 {
+        return Err("Enter a train name up to 80 characters.".into());
+    }
     let mut active = state.active.lock().map_err(|_| lock_error())?;
-    let session = active.as_mut().ok_or_else(|| "Open a project before creating content.".to_string())?;
+    let session = active
+        .as_mut()
+        .ok_or_else(|| "Open a project before creating content.".to_string())?;
     let previous_index = session.container.index.clone();
     let id = format!("train-{}-{}", now_ms(), previous_index.content.len());
     let config = serde_json::to_vec(&serde_json::json!({ "id": id, "name": name, "model": null, "texture": null, "properties": {} })).map_err(|e| e.to_string())?;
     let resource = session.container.put_blob(&config, "application/json")?;
-    let entry = ContentEntry { id: id.clone(), kind: "train".into(), name: name.into(), file: format!("content/trains/{id}.json"), updated_at: now_ms() as u128, resources: vec![resource] };
+    let entry = ContentEntry {
+        id: id.clone(),
+        kind: "train".into(),
+        name: name.into(),
+        file: format!("content/trains/{id}.json"),
+        updated_at: now_ms() as u128,
+        resources: vec![resource],
+    };
     session.container.index.content.push(entry.clone());
     if let Err(error) = session.container.commit() {
         session.container.index = previous_index;
         return Err(error);
     }
-    if session.container.should_compact().unwrap_or(false) { let _ = session.container.compact(); }
+    if session.container.should_compact().unwrap_or(false) {
+        let _ = session.container.compact();
+    }
     Ok(entry)
 }
 
 #[tauri::command]
 fn save_project(state: State<AppState>) -> Result<(), String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?;
-    active.as_mut().ok_or_else(|| "No project is open.".to_string())?.container.flush()
+    active
+        .as_mut()
+        .ok_or_else(|| "No project is open.".to_string())?
+        .container
+        .flush()
 }
 
 #[tauri::command]
 fn close_project(state: State<AppState>) -> Result<(), String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?;
-    if let Some(session) = active.as_mut() { session.container.flush()?; }
+    if let Some(session) = active.as_mut() {
+        session.container.flush()?;
+    }
     *active = None;
     Ok(())
 }
 
 #[tauri::command]
 fn take_pending_project_path(state: State<AppState>) -> Result<Option<String>, String> {
-    Ok(state.pending_paths.lock().map_err(|_| lock_error())?.pop_front().map(|path| path.to_string_lossy().into_owned()))
+    Ok(state
+        .pending_paths
+        .lock()
+        .map_err(|_| lock_error())?
+        .pop_front()
+        .map(|path| path.to_string_lossy().into_owned()))
 }
 
 pub fn run() {
+    let mut pending_paths = VecDeque::new();
+    if let Some(path) = project_path_from_arguments(std::env::args_os()) {
+        pending_paths.push_back(path);
+    }
+    let state = AppState {
+        active: Mutex::new(None),
+        pending_paths: Mutex::new(pending_paths),
+    };
     tauri::Builder::default()
-        .manage(AppState::default())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(path) = project_path_from_arguments(argv) {
+                queue_project_path(app, path);
+            }
+        }))
+        .manage(state)
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![list_recent_projects, remove_recent_project, create_project, open_project, get_active_project, create_train, save_project, close_project, take_pending_project_path])
+        .invoke_handler(tauri::generate_handler![
+            list_recent_projects,
+            remove_recent_project,
+            create_project,
+            open_project,
+            get_active_project,
+            create_train,
+            save_project,
+            close_project,
+            take_pending_project_path
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run MTR Pack Studio");
 }
@@ -207,7 +344,31 @@ mod tests {
         drop(container);
         let renamed = path.with_file_name(format!("different-{}.mtrpack", now_ms()));
         fs::rename(&path, &renamed).unwrap();
-        assert_eq!(Container::open(&renamed).unwrap().index.name, "Internal Name");
+        assert_eq!(
+            Container::open(&renamed).unwrap().index.name,
+            "Internal Name"
+        );
         fs::remove_file(renamed).unwrap();
+    }
+
+    #[test]
+    fn startup_arguments_only_accept_valid_project_files() {
+        let path = std::env::temp_dir().join(format!("argument-{}.mtrpack", now_ms()));
+        drop(Container::create(&path, "Argument", "mtr4").unwrap());
+        let selected = project_path_from_arguments([
+            std::ffi::OsString::from("app.exe"),
+            path.clone().into_os_string(),
+        ])
+        .unwrap();
+        assert_eq!(selected, path.canonicalize().unwrap());
+        let selected_without_executable =
+            project_path_from_arguments([path.clone().into_os_string()]).unwrap();
+        assert_eq!(selected_without_executable, path.canonicalize().unwrap());
+        assert!(project_path_from_arguments([
+            std::ffi::OsString::from("app.exe"),
+            std::env::temp_dir().into_os_string()
+        ])
+        .is_none());
+        fs::remove_file(path).unwrap();
     }
 }
