@@ -1,10 +1,12 @@
 mod container;
 mod domain;
 mod model;
+mod exporter;
 
 use container::{has_project_magic, is_project_path, Container, ContentEntry};
 use domain::{slugify, AssetDefinition, AssetDependency, ModelLayer, TrainDefinition};
 use model::ImportAnalysis;
+use exporter::{ExportOptions, ExportReport, ValidationIssue};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -403,6 +405,28 @@ fn get_model_preview(state: State<AppState>, asset_id: String) -> Result<tauri::
 }
 
 #[tauri::command]
+fn update_project_settings(state: State<AppState>, namespace: String, description: String) -> Result<ProjectData, String> {
+    validate_resource_id(&namespace)?;
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or_else(|| "No project is open.".to_string())?;
+    let previous = session.container.index.clone(); session.container.index.namespace = namespace; session.container.index.description = description;
+    if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
+    Ok(project_data(&session.container))
+}
+
+#[tauri::command]
+fn validate_export(state: State<AppState>, options: ExportOptions) -> Result<Vec<ValidationIssue>, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or_else(|| "No project is open.".to_string())?;
+    exporter::validate(&mut session.container, &options)
+}
+
+#[tauri::command]
+fn export_resource_pack(state: State<AppState>, path: String, options: ExportOptions) -> Result<ExportReport, String> {
+    let mut path = PathBuf::from(path); if !path.extension().and_then(|value|value.to_str()).is_some_and(|value|value.eq_ignore_ascii_case("zip")){path.set_extension("zip");}
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or_else(|| "No project is open.".to_string())?;
+    exporter::export(&mut session.container, &path, &options)
+}
+
+#[tauri::command]
 fn save_project(state: State<AppState>) -> Result<(), String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?;
     active
@@ -463,6 +487,9 @@ pub fn run() {
             import_model,
             get_model_asset,
             get_model_preview,
+            update_project_settings,
+            validate_export,
+            export_resource_pack,
             save_project,
             close_project,
             take_pending_project_path
