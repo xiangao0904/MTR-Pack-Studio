@@ -60,6 +60,8 @@ pub struct ProjectIndex {
     #[serde(default = "default_namespace")]
     pub namespace: String,
     pub content: Vec<ContentEntry>,
+    #[serde(default)]
+    pub assets: BTreeMap<String, String>,
     pub blobs: BTreeMap<String, BlobLocation>,
 }
 
@@ -120,6 +122,7 @@ impl Container {
             target: String::new(),
             namespace: crate::domain::slugify(name, "mtr_pack"),
             content: Vec::new(),
+            assets: BTreeMap::new(),
             blobs: BTreeMap::new(),
         };
         let mut container = Self {

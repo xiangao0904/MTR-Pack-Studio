@@ -9,6 +9,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "getrandom 0.3.4",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2106,6 +2119,8 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
+ "tobj",
+ "ufbx",
  "uuid",
  "windows-sys 0.61.2",
  "zstd",
@@ -3847,6 +3862,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
+name = "tobj"
+version = "4.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6eb8e04167c1c0c76b5de63226fd733485ad63ef71e40de31e16272f47b099e2"
+dependencies = [
+ "ahash",
+]
+
+[[package]]
 name = "tokio"
 version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4118,6 +4142,15 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ufbx"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40e2ed9a04df77d43de59675bcc4e667702589df0fd77c80a99061049142397a"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -5079,6 +5112,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1afec51604565183aeb5c54c20aeab286120d4e4460f7f76e3e8bb8c0d99473"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.57"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.57"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "146c01f5ab44258da43cf276c74a2763db2ff3969c9c652c3f2de07041d0b2bc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

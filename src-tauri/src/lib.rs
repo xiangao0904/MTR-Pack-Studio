@@ -1,8 +1,10 @@
 mod container;
 mod domain;
+mod model;
 
 use container::{has_project_magic, is_project_path, Container, ContentEntry};
-use domain::{slugify, TrainDefinition};
+use domain::{slugify, AssetDefinition, AssetDependency, ModelLayer, TrainDefinition};
+use model::ImportAnalysis;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -12,6 +14,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -142,6 +145,18 @@ fn write_train_document(container: &mut Container, index: usize, train: &TrainDe
     let entry = container.index.content.get_mut(index).ok_or_else(|| "The selected train no longer exists.".to_string())?;
     entry.name = train.name.clone(); entry.updated_at = now_ms() as u128; entry.resources = vec![hash];
     Ok(entry.clone())
+}
+
+fn read_asset(container: &mut Container, id: &str) -> Result<AssetDefinition, String> {
+    let hash = container.index.assets.get(id).cloned().ok_or_else(|| "The selected model asset no longer exists.".to_string())?;
+    serde_json::from_slice(&container.read_blob(&hash)?).map_err(|e| format!("Invalid model asset: {e}"))
+}
+
+fn media_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase().as_str() {
+        "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "obj" => "model/obj",
+        "mtl" => "model/mtl", "fbx" => "model/vnd.fbx", "mqo" => "model/vnd.mqo", _ => "application/octet-stream",
+    }
 }
 
 fn recent_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -338,6 +353,56 @@ fn delete_train(state: State<AppState>, train_id: String) -> Result<(), String> 
 }
 
 #[tauri::command]
+fn analyze_model_import(path: String) -> Result<ImportAnalysis, String> {
+    let path = Path::new(&path); if !path.is_file() { return Err("Choose an existing model file.".into()); }
+    model::analyze(path)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelImportResult { train: TrainDefinition, asset: AssetDefinition }
+
+#[tauri::command]
+fn import_model(state: State<AppState>, train_id: String, carriage_id: String, slot: String, path: String, dependency_overrides: std::collections::BTreeMap<String, String>) -> Result<ModelImportResult, String> {
+    let path = Path::new(&path); if !path.is_file() { return Err("Choose an existing model file.".into()); }
+    let document = model::parse(path, &dependency_overrides)?; let preview = model::to_glb(&document)?;
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let session = active.as_mut().ok_or_else(|| "Open a project before importing a model.".to_string())?;
+    let entry_index = train_entry_index(&session.container, &train_id)?; let mut train = read_train_document(&mut session.container, entry_index)?;
+    let carriage = train.carriages.iter_mut().find(|item| item.id == carriage_id).ok_or_else(|| "The selected carriage no longer exists.".to_string())?;
+    let previous = session.container.index.clone();
+    let source = fs::read(path).map_err(|e| e.to_string())?; let source_hash = session.container.put_blob(&source, media_type(path))?;
+    let mut dependencies = Vec::new();
+    for referenced in model::referenced_files(path)? {
+        let name = referenced.file_name().and_then(|value| value.to_str()).unwrap_or("dependency").to_string();
+        let resolved = if referenced.exists() { referenced } else { dependency_overrides.get(&name).map(PathBuf::from).ok_or_else(|| format!("Locate the missing model dependency: {name}"))? };
+        let bytes = fs::read(&resolved).map_err(|e| format!("Unable to read {name}: {e}"))?; let hash = session.container.put_blob(&bytes, media_type(&resolved))?;
+        dependencies.push(AssetDependency { name, hash, media_type: media_type(&resolved).into() });
+    }
+    let document_hash = session.container.put_blob(&rmp_serde::to_vec_named(&document).map_err(|e| e.to_string())?, "application/vnd.mtrpack.model+msgpack")?;
+    let preview_hash = session.container.put_blob(&preview, "model/gltf-binary")?; let asset_id = Uuid::new_v4().to_string();
+    let asset = AssetDefinition { id: asset_id.clone(), name: path.file_stem().and_then(|value| value.to_str()).unwrap_or("Model").into(), source_format: model::model_format(path)?, source_hash, document_hash, preview_hash, dependencies, parts: model::summaries(&document), warnings: document.warnings.clone() };
+    let asset_hash = session.container.put_blob(&serde_json::to_vec(&asset).map_err(|e| e.to_string())?, "application/vnd.mtrpack.asset+json")?; session.container.index.assets.insert(asset_id.clone(), asset_hash);
+    let layer = ModelLayer { id: Uuid::new_v4().to_string(), name: asset.name.clone(), asset_id, flip_texture_v: false, visible: true, material_bindings: Vec::new(), part_rules: Default::default() };
+    match slot.as_str() { "body" => carriage.body_models.push(layer), "bogie1" => carriage.bogie_1_models.push(layer), "bogie2" => carriage.bogie_2_models.push(layer), _ => { session.container.index = previous; return Err("Choose a valid carriage model slot.".into()); } }
+    train.revision += 1; write_train_document(&mut session.container, entry_index, &train)?;
+    if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
+    Ok(ModelImportResult { train, asset })
+}
+
+#[tauri::command]
+fn get_model_asset(state: State<AppState>, asset_id: String) -> Result<AssetDefinition, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or_else(|| "No project is open.".to_string())?;
+    read_asset(&mut session.container, &asset_id)
+}
+
+#[tauri::command]
+fn get_model_preview(state: State<AppState>, asset_id: String) -> Result<tauri::ipc::Response, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or_else(|| "No project is open.".to_string())?;
+    let asset = read_asset(&mut session.container, &asset_id)?; Ok(tauri::ipc::Response::new(session.container.read_blob(&asset.preview_hash)?))
+}
+
+#[tauri::command]
 fn save_project(state: State<AppState>) -> Result<(), String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?;
     active
@@ -394,6 +459,10 @@ pub fn run() {
             get_train,
             update_train,
             delete_train,
+            analyze_model_import,
+            import_model,
+            get_model_asset,
+            get_model_preview,
             save_project,
             close_project,
             take_pending_project_path

@@ -22,6 +22,8 @@ blake3 = "1"
 rmp-serde = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 zstd = "0.13"
+tobj = "4.0.3"
+ufbx = "0.11.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

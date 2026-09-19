@@ -12,6 +12,10 @@ export interface ModelLayer { id: string; name: string; assetId: string; flipTex
 export interface CarriageDefinition { id: string; exportId: string; name: string; length: number; width: number; bogie1Position: number; bogie2Position: number; couplingPadding1: number; couplingPadding2: number; end1: EndConfiguration; end2: EndConfiguration; placement: CarPlacementRule; bodyModels: ModelLayer[]; bogie1Models: ModelLayer[]; bogie2Models: ModelLayer[] }
 export interface PreviewCarriage { carriageId: string; reversed: boolean }
 export interface TrainDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; tags: string[]; mtr3BaseTrainType: string; carriages: CarriageDefinition[]; previewConsist: PreviewCarriage[] }
+export type ModelFormat = 'obj' | 'fbx' | 'mqo'
+export interface ModelPartSummary { id: string; name: string; triangleCount: number }
+export interface AssetDefinition { id: string; name: string; sourceFormat: ModelFormat; sourceHash: string; documentHash: string; previewHash: string; dependencies: { name: string; hash: string; mediaType: string }[]; parts: ModelPartSummary[]; warnings: string[] }
+export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
 
 const recentKey = 'mtr-pack-studio:recent-projects'
 const inTauri = () => '__TAURI_INTERNALS__' in window
@@ -111,6 +115,31 @@ export async function deleteTrain(path: string, trainId: string): Promise<void> 
   if (inTauri()) return invoke('delete_train', { trainId })
   const project = await getProject(path); project.content = project.content.filter(item => item.id !== trainId)
   localStorage.setItem(dataKey(path), JSON.stringify(project)); localStorage.removeItem(`${dataKey(path)}:train:${trainId}`)
+}
+
+export async function chooseModelFile(): Promise<string | null> {
+  if (!inTauri()) return null
+  return open({ directory: false, multiple: false, title: 'Import Model', filters: [{ name: '3D Models', extensions: ['obj', 'fbx', 'mqo'] }] })
+}
+
+export async function analyzeModelImport(path: string): Promise<ImportAnalysis> {
+  if (!inTauri()) throw new Error('Model import requires the desktop app.')
+  return invoke<ImportAnalysis>('analyze_model_import', { path })
+}
+
+export async function importModel(trainId: string, carriageId: string, slot: 'body' | 'bogie1' | 'bogie2', path: string, dependencyOverrides: Record<string, string> = {}): Promise<{ train: TrainDefinition; asset: AssetDefinition }> {
+  if (!inTauri()) throw new Error('Model import requires the desktop app.')
+  return invoke('import_model', { trainId, carriageId, slot, path, dependencyOverrides })
+}
+
+export async function getModelAsset(assetId: string): Promise<AssetDefinition> {
+  if (!inTauri()) throw new Error('Model assets require the desktop app.')
+  return invoke<AssetDefinition>('get_model_asset', { assetId })
+}
+
+export async function getModelPreview(assetId: string): Promise<ArrayBuffer> {
+  if (!inTauri()) throw new Error('Model preview requires the desktop app.')
+  return invoke<ArrayBuffer>('get_model_preview', { assetId })
 }
 
 export async function saveProject(): Promise<void> {
