@@ -355,9 +355,9 @@ fn delete_train(state: State<AppState>, train_id: String) -> Result<(), String> 
 }
 
 #[tauri::command]
-fn analyze_model_import(path: String) -> Result<ImportAnalysis, String> {
+fn analyze_model_import(path: String, dependency_overrides: std::collections::BTreeMap<String, String>) -> Result<ImportAnalysis, String> {
     let path = Path::new(&path); if !path.is_file() { return Err("Choose an existing model file.".into()); }
-    model::analyze(path)
+    model::analyze(path, &dependency_overrides)
 }
 
 #[derive(Serialize)]
@@ -375,11 +375,16 @@ fn import_model(state: State<AppState>, train_id: String, carriage_id: String, s
     let previous = session.container.index.clone();
     let source = fs::read(path).map_err(|e| e.to_string())?; let source_hash = session.container.put_blob(&source, media_type(path))?;
     let mut dependencies = Vec::new();
-    for referenced in model::referenced_files(path)? {
+    for referenced in model::referenced_files(path, &dependency_overrides)? {
         let name = referenced.file_name().and_then(|value| value.to_str()).unwrap_or("dependency").to_string();
         let resolved = if referenced.exists() { referenced } else { dependency_overrides.get(&name).map(PathBuf::from).ok_or_else(|| format!("Locate the missing model dependency: {name}"))? };
         let bytes = fs::read(&resolved).map_err(|e| format!("Unable to read {name}: {e}"))?; let hash = session.container.put_blob(&bytes, media_type(&resolved))?;
         dependencies.push(AssetDependency { name, hash, media_type: media_type(&resolved).into() });
+    }
+    for (name, bytes) in model::embedded_dependencies(path)? {
+        if dependencies.iter().any(|dependency| dependency.name.eq_ignore_ascii_case(&name)) { continue; }
+        let hash = session.container.put_blob(&bytes, media_type(Path::new(&name)))?;
+        dependencies.push(AssetDependency { name: name.clone(), hash, media_type: media_type(Path::new(&name)).into() });
     }
     let document_hash = session.container.put_blob(&rmp_serde::to_vec_named(&document).map_err(|e| e.to_string())?, "application/vnd.mtrpack.model+msgpack")?;
     let preview_hash = session.container.put_blob(&preview, "model/gltf-binary")?; let asset_id = Uuid::new_v4().to_string();

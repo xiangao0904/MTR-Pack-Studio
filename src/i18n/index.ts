@@ -34,6 +34,9 @@ const en = {
   endConnections: 'End connections', end1Gangway: 'End 1 gangway', end2Gangway: 'End 2 gangway', end1Barrier: 'End 1 barrier', end2Barrier: 'End 2 barrier',
   bodyModel: 'Import body model', parts: 'Parts', partPlacement: 'Part placement', carriagePlacement: 'Carriage placement', preset: 'Preset', allCars: 'All cars', firstCar: 'First car', lastCar: 'Last car', oddCars: 'Odd cars', evenCars: 'Even cars', everyCars: 'Every N cars', custom: 'Custom', interval: 'Interval', offset: 'Offset', whitelist: 'Whitelist', blacklist: 'Blacklist',
   mtr3Hint: 'MTR 3 and NTE use one base train type and position filters to assemble the visible cars.', baseTrainType: 'Base train type', mtr3LengthHint: 'All carriages must use the same length for MTR 3 export.', loading: 'Loading…', missingDependencies: 'Missing model dependencies',
+  namespace: 'Minecraft namespace', namespaceHint: 'Lowercase letters, numbers, dots, underscores and hyphens only.', saveSettings: 'Save settings', settingsSaved: 'Project settings saved.',
+  exportTarget: 'Export target', minecraftVersion: 'Minecraft version', modelFormat: 'Model format', validating: 'Validating…', continueExport: 'Validate and export', exportComplete: 'Resource pack exported with', files: 'files.',
+  locateDependency: 'Locate dependency:', browserExportWarning: 'Browser preview validates the workflow but does not create binary resource packs.', exportDialogTitle: 'Export MTR Resource Pack', resourcePack: 'Resource Pack',
 } as const
 export type MessageKey = keyof typeof en
 export const t = (key: MessageKey) => en[key]

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
+import { t } from '../i18n'
 
 export interface ProjectSummary { name: string; path: string; lastOpened: number }
 export interface ContentEntry { id: string; kind: string; name: string; file: string; updatedAt: number; resources?: string[] }
@@ -16,6 +17,9 @@ export type ModelFormat = 'obj' | 'fbx' | 'mqo'
 export interface ModelPartSummary { id: string; name: string; triangleCount: number }
 export interface AssetDefinition { id: string; name: string; sourceFormat: ModelFormat; sourceHash: string; documentHash: string; previewHash: string; dependencies: { name: string; hash: string; mediaType: string }[]; parts: ModelPartSummary[]; warnings: string[] }
 export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
+export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo' }
+export interface ValidationIssue { severity: 'error' | 'warning'; message: string; trainId?: string; carriageId?: string; field?: string }
+export interface ExportReport { path: string; fileCount: number; warnings: ValidationIssue[] }
 
 const recentKey = 'mtr-pack-studio:recent-projects'
 const inTauri = () => '__TAURI_INTERNALS__' in window
@@ -122,9 +126,15 @@ export async function chooseModelFile(): Promise<string | null> {
   return open({ directory: false, multiple: false, title: 'Import Model', filters: [{ name: '3D Models', extensions: ['obj', 'fbx', 'mqo'] }] })
 }
 
-export async function analyzeModelImport(path: string): Promise<ImportAnalysis> {
+export async function chooseModelDependency(name: string): Promise<string | null> {
+  if (!inTauri()) return null
+  const extension = name.split('.').pop() || ''
+  return open({ directory: false, multiple: false, title: `${t('locateDependency')} ${name}`, filters: extension ? [{ name, extensions: [extension] }] : undefined })
+}
+
+export async function analyzeModelImport(path: string, dependencyOverrides: Record<string, string> = {}): Promise<ImportAnalysis> {
   if (!inTauri()) throw new Error('Model import requires the desktop app.')
-  return invoke<ImportAnalysis>('analyze_model_import', { path })
+  return invoke<ImportAnalysis>('analyze_model_import', { path, dependencyOverrides })
 }
 
 export async function importModel(trainId: string, carriageId: string, slot: 'body' | 'bogie1' | 'bogie2', path: string, dependencyOverrides: Record<string, string> = {}): Promise<{ train: TrainDefinition; asset: AssetDefinition }> {
@@ -140,6 +150,27 @@ export async function getModelAsset(assetId: string): Promise<AssetDefinition> {
 export async function getModelPreview(assetId: string): Promise<ArrayBuffer> {
   if (!inTauri()) throw new Error('Model preview requires the desktop app.')
   return invoke<ArrayBuffer>('get_model_preview', { assetId })
+}
+
+export async function updateProjectSettings(path: string, namespace: string, description: string): Promise<ProjectData> {
+  if (inTauri()) return invoke<ProjectData>('update_project_settings', { namespace, description })
+  const project = await getProject(path); project.namespace = namespace; project.description = description; localStorage.setItem(dataKey(path), JSON.stringify(project)); return project
+}
+
+export async function validateExport(options: ExportOptions): Promise<ValidationIssue[]> {
+  if (inTauri()) return invoke<ValidationIssue[]>('validate_export', { options })
+  return [{ severity: 'warning', message: t('browserExportWarning') }]
+}
+
+export async function chooseExportPath(projectName: string, target: ExportOptions['target']): Promise<string | null> {
+  if (!inTauri()) return null
+  const suffix = target === 'mtr4' ? 'MTR4' : 'MTR3-NTE'
+  return save({ title: t('exportDialogTitle'), defaultPath: `${projectName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')} ${suffix}.zip`, filters: [{ name: t('resourcePack'), extensions: ['zip'] }] })
+}
+
+export async function exportResourcePack(path: string, options: ExportOptions): Promise<ExportReport> {
+  if (!inTauri()) throw new Error('Resource pack export requires the desktop app.')
+  return invoke<ExportReport>('export_resource_pack', { path, options })
 }
 
 export async function saveProject(): Promise<void> {

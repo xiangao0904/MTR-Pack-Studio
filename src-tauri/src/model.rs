@@ -1,6 +1,6 @@
 use crate::domain::{slugify, ModelFormat, ModelPartSummary};
 use serde::{Deserialize, Serialize};
-use std::{collections::{BTreeMap, BTreeSet}, fs, path::{Path, PathBuf}};
+use std::{collections::{BTreeMap, BTreeSet}, fs, io::BufReader, path::{Path, PathBuf}};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,19 +47,19 @@ pub fn model_format(path: &Path) -> Result<ModelFormat, String> {
     }
 }
 
-pub fn analyze(path: &Path) -> Result<ImportAnalysis, String> {
+pub fn analyze(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ImportAnalysis, String> {
     let format = model_format(path)?;
-    let missing_dependencies: Vec<String> = referenced_files(path)?.into_iter().filter(|item| !item.exists()).map(|item| item.to_string_lossy().into_owned()).collect();
+    let missing_dependencies: Vec<String> = referenced_files(path, overrides)?.into_iter().filter(|item| !item.exists()).map(|item| item.to_string_lossy().into_owned()).collect();
     if !missing_dependencies.is_empty() { return Ok(ImportAnalysis { format, missing_dependencies, parts: Vec::new(), warnings: Vec::new() }); }
-    let document = parse(path, &BTreeMap::new())?;
+    let document = parse(path, overrides)?;
     Ok(ImportAnalysis { format, missing_dependencies, parts: summaries(&document), warnings: document.warnings })
 }
 
 pub fn parse(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
     match model_format(path)? {
         ModelFormat::Obj => parse_obj(path, overrides),
-        ModelFormat::Fbx => parse_fbx(path),
-        ModelFormat::Mqo => parse_mqo(path),
+        ModelFormat::Fbx => parse_fbx(path, overrides),
+        ModelFormat::Mqo => parse_mqo(path, overrides),
     }
 }
 
@@ -67,7 +67,7 @@ pub fn summaries(document: &ModelDocument) -> Vec<ModelPartSummary> {
     document.parts.iter().map(|part| ModelPartSummary { id: part.id.clone(), name: part.name.clone(), triangle_count: part.indices.len() / 3 }).collect()
 }
 
-pub fn referenced_files(path: &Path) -> Result<Vec<PathBuf>, String> {
+pub fn referenced_files(path: &Path, overrides: &BTreeMap<String, String>) -> Result<Vec<PathBuf>, String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let text = fs::read_to_string(path).unwrap_or_default();
     let mut files = BTreeSet::new();
@@ -75,26 +75,53 @@ pub fn referenced_files(path: &Path) -> Result<Vec<PathBuf>, String> {
         ModelFormat::Obj => {
             for line in text.lines().map(str::trim) {
                 if let Some(name) = line.strip_prefix("mtllib ") {
-                    let mtl = parent.join(name.trim()); files.insert(mtl.clone());
+                    let requested = name.trim(); let key = Path::new(requested).file_name().and_then(|value|value.to_str()).unwrap_or(requested); let mtl = overrides.get(key).map(PathBuf::from).unwrap_or_else(||parent.join(requested)); files.insert(mtl.clone());
                     if let Ok(mtl_text) = fs::read_to_string(&mtl) {
                         for mtl_line in mtl_text.lines().map(str::trim) {
-                            if let Some(name) = mtl_line.strip_prefix("map_Kd ") { files.insert(parent.join(name.split_whitespace().last().unwrap_or_default())); }
+                            if let Some(name) = mtl_line.strip_prefix("map_Kd ") { let requested=name.split_whitespace().last().unwrap_or_default();let key=Path::new(requested).file_name().and_then(|value|value.to_str()).unwrap_or(requested);files.insert(overrides.get(key).map(PathBuf::from).unwrap_or_else(||mtl.parent().unwrap_or(parent).join(requested))); }
                         }
                     }
                 }
             }
         }
         ModelFormat::Mqo => {
-            for capture in quoted_values_after(&text, "tex(") { files.insert(parent.join(capture)); }
+            for capture in quoted_values_after(&text, "tex(") { let key=Path::new(&capture).file_name().and_then(|value|value.to_str()).unwrap_or(&capture);files.insert(overrides.get(key).map(PathBuf::from).unwrap_or_else(||parent.join(capture))); }
         }
-        ModelFormat::Fbx => {}
+        ModelFormat::Fbx => {
+            let scene = load_fbx(path)?;
+            for texture in scene.textures.iter() {
+                if !texture.content.is_empty() { continue; }
+                let requested = if texture.relative_filename.is_empty() { texture.filename.to_string() } else { texture.relative_filename.to_string() };
+                if requested.is_empty() { continue; }
+                let key = Path::new(&requested).file_name().and_then(|value| value.to_str()).unwrap_or(&requested);
+                files.insert(overrides.get(key).map(PathBuf::from).unwrap_or_else(|| parent.join(requested)));
+            }
+        }
     }
     Ok(files.into_iter().collect())
 }
 
+pub fn embedded_dependencies(path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if model_format(path)? != ModelFormat::Fbx { return Ok(Vec::new()); }
+    let scene = load_fbx(path)?;
+    Ok(scene.textures.iter().filter_map(|texture| {
+        if texture.content.is_empty() { return None; }
+        let source = if texture.relative_filename.is_empty() { texture.filename.to_string() } else { texture.relative_filename.to_string() };
+        let name = Path::new(&source).file_name()?.to_str()?.to_string();
+        Some((name, texture.content.to_vec()))
+    }).collect())
+}
+
 fn parse_obj(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
     let options = tobj::LoadOptions { triangulate: true, single_index: true, ..Default::default() };
-    let (models, materials) = tobj::load_obj(path, &options).map_err(|e| format!("Unable to parse OBJ: {e}"))?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut source = BufReader::new(fs::File::open(path).map_err(|e| format!("Unable to read OBJ: {e}"))?);
+    let (models, materials) = tobj::load_obj_buf(&mut source, &options, |material_path| {
+        let name = material_path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+        let resolved = overrides.get(name).map(PathBuf::from).unwrap_or_else(|| parent.join(material_path));
+        let file = fs::File::open(resolved).map_err(|_| tobj::LoadError::OpenFileFailed)?;
+        tobj::load_mtl_buf(&mut BufReader::new(file))
+    }).map_err(|e| format!("Unable to parse OBJ: {e}"))?;
     let materials = materials.unwrap_or_default().into_iter().enumerate().map(|(index, material)| {
         let texture = material.diffuse_texture.map(|name| overrides.get(&name).cloned().unwrap_or(name));
         let diffuse = material.diffuse.unwrap_or([0.8, 0.8, 0.8]);
@@ -113,14 +140,18 @@ fn parse_obj(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
     Ok(ModelDocument { parts, materials, warnings: Vec::new() })
 }
 
-fn parse_fbx(path: &Path) -> Result<ModelDocument, String> {
+fn load_fbx(path: &Path) -> Result<ufbx::SceneRoot, String> {
     let options = ufbx::LoadOpts { generate_missing_normals: true, ignore_missing_external_files: true, target_axes: ufbx::CoordinateAxes::right_handed_y_up(), target_unit_meters: 1.0, ..Default::default() };
-    let scene = ufbx::load_file(&path.to_string_lossy(), options).map_err(|e| format!("Unable to parse FBX: {e:?}"))?;
+    ufbx::load_file(&path.to_string_lossy(), options).map_err(|e| format!("Unable to parse FBX: {e:?}"))
+}
+
+fn parse_fbx(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
+    let scene = load_fbx(path)?;
     let mut warnings = Vec::new();
     if !scene.skin_deformers.is_empty() { warnings.push("Skinning was detected. The imported preview uses the static mesh pose.".into()); }
     if !scene.blend_deformers.is_empty() { warnings.push("Morph targets were detected and skipped.".into()); }
     if scene.anim_stacks.len() > 1 || !scene.anim_curves.is_empty() { warnings.push("Animation timelines were detected and skipped.".into()); }
-    let materials = scene.materials.iter().enumerate().map(|(index, material)| ModelMaterial { id: format!("material-{index}"), name: material.element.name.to_string(), color: [0.8, 0.8, 0.8, 1.0], texture: material.textures.first().map(|entry| entry.texture.relative_filename.to_string()).filter(|name| !name.is_empty()) }).collect();
+    let materials = scene.materials.iter().enumerate().map(|(index, material)| ModelMaterial { id: format!("material-{index}"), name: material.element.name.to_string(), color: [0.8, 0.8, 0.8, 1.0], texture: material.textures.first().and_then(|entry| { let name = if entry.texture.relative_filename.is_empty() { entry.texture.filename.to_string() } else { entry.texture.relative_filename.to_string() }; if name.is_empty() { None } else { let key = Path::new(&name).file_name().and_then(|value| value.to_str()).unwrap_or(&name); Some(overrides.get(key).cloned().unwrap_or(name)) } }) }).collect();
     let mut parts = Vec::new();
     for (node_index, node) in scene.nodes.iter().enumerate() {
         let Some(mesh) = node.mesh.as_ref() else { continue };
@@ -145,7 +176,7 @@ fn parse_fbx(path: &Path) -> Result<ModelDocument, String> {
     Ok(ModelDocument { parts, materials, warnings })
 }
 
-fn parse_mqo(path: &Path) -> Result<ModelDocument, String> {
+fn parse_mqo(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("Unable to read MQO: {e}"))?;
     let mut materials = Vec::new();
     if let Some(start) = text.find("Material ") {
@@ -153,7 +184,8 @@ fn parse_mqo(path: &Path) -> Result<ModelDocument, String> {
             for (index, line) in text[start + open + 1..start + open + close].lines().map(str::trim).filter(|line| !line.is_empty()).enumerate() {
                 let name = quoted(line).unwrap_or_else(|| format!("Material {index}")); let values = tuple_values(line, "col(").unwrap_or_default();
                 let color = [*values.first().unwrap_or(&0.8), *values.get(1).unwrap_or(&0.8), *values.get(2).unwrap_or(&0.8), *values.get(3).unwrap_or(&1.0)];
-                materials.push(ModelMaterial { id: format!("material-{index}"), name, color, texture: quoted_after(line, "tex(") });
+                let texture = quoted_after(line, "tex(").map(|value| { let key = Path::new(&value).file_name().and_then(|item| item.to_str()).unwrap_or(&value); overrides.get(key).cloned().unwrap_or(value) });
+                materials.push(ModelMaterial { id: format!("material-{index}"), name, color, texture });
             }
         }}
     }

@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Box, Copy, Eye, EyeOff, Plus, Trash2, Upload } from '@lucide/vue'
 import ModelViewport from './ModelViewport.vue'
 import { t } from '../i18n'
-import { analyzeModelImport, chooseModelFile, getModelAsset, getTrain, importModel, updateTrain, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition } from '../lib/projects'
+import { analyzeModelImport, chooseModelDependency, chooseModelFile, getModelAsset, getTrain, importModel, updateTrain, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition } from '../lib/projects'
 
 const props = defineProps<{ projectPath: string; entry: ContentEntry }>()
 const emit = defineEmits<{ back: []; changed: [entry: ContentEntry]; status: [value: 'saving' | 'saved' | 'failed']; error: [message: string] }>()
@@ -52,10 +52,10 @@ function scheduleSave() { changeSequence += 1; if (timer) window.clearTimeout(ti
 async function flush() {
   if (!train.value || saving) { if (saving) scheduleSave(); return }
   if (timer) window.clearTimeout(timer); timer = undefined; saving = true; emit('status', 'saving')
-  const sequence = changeSequence; const snapshot = structuredClone(train.value)
+  const sequence = changeSequence; const snapshot = JSON.parse(JSON.stringify(train.value)) as TrainDefinition
   try {
     const updated = await updateTrain(props.projectPath, snapshot, snapshot.revision)
-    if (train.value) train.value.revision = updated.revision
+    hydrating = true; if (train.value) train.value.revision = updated.revision; await nextTick(); hydrating = false
     emit('changed', { ...props.entry, name: updated.name, updatedAt: Date.now() }); emit('status', 'saved')
     if (sequence !== changeSequence) scheduleSave()
   } catch (cause) { emit('status', 'failed'); emit('error', message(cause)) }
@@ -68,7 +68,7 @@ function addCarriage() {
   const number = train.value.carriages.length + 1; const item: CarriageDefinition = { id: crypto.randomUUID(), exportId: `carriage_${number}`, name: `Carriage ${number}`, length: 20, width: 3, bogie1Position: 7, bogie2Position: -7, couplingPadding1: 0, couplingPadding2: 0, end1: { gangway: false, barrier: false }, end2: { gangway: false, barrier: false }, placement: { preset: 'all', offset: 0, whitelist: '', blacklist: '' }, bodyModels: [], bogie1Models: [], bogie2Models: [] }
   train.value.carriages.push(item); train.value.previewConsist.push({ carriageId: item.id, reversed: false }); selectedCarriageId.value = item.id
 }
-function duplicateCarriage() { if (!train.value || !carriage.value) return; const copy = structuredClone(carriage.value); copy.id = crypto.randomUUID(); copy.name += ' Copy'; copy.exportId += '_copy'; for (const layer of [...copy.bodyModels, ...copy.bogie1Models, ...copy.bogie2Models]) layer.id = crypto.randomUUID(); train.value.carriages.push(copy); selectedCarriageId.value = copy.id }
+function duplicateCarriage() { if (!train.value || !carriage.value) return; const copy = JSON.parse(JSON.stringify(carriage.value)) as CarriageDefinition; copy.id = crypto.randomUUID(); copy.name += ' Copy'; copy.exportId += '_copy'; for (const layer of [...copy.bodyModels, ...copy.bogie1Models, ...copy.bogie2Models]) layer.id = crypto.randomUUID(); train.value.carriages.push(copy); selectedCarriageId.value = copy.id }
 function removeCarriage() { if (!train.value || !carriage.value || train.value.carriages.length === 1) return; const id = carriage.value.id; train.value.carriages = train.value.carriages.filter(item => item.id !== id); train.value.previewConsist = train.value.previewConsist.filter(item => item.carriageId !== id); selectedCarriageId.value = train.value.carriages[0].id }
 function moveCarriage(direction: -1 | 1) { if (!train.value || !carriage.value) return; const index = train.value.carriages.indexOf(carriage.value); const next = index + direction; if (next < 0 || next >= train.value.carriages.length) return; [train.value.carriages[index], train.value.carriages[next]] = [train.value.carriages[next], train.value.carriages[index]] }
 function selectLayer(layer: ModelLayer) { selectedLayerId.value = layer.id; tab.value = 'models' }
@@ -77,8 +77,9 @@ async function addModel(slot: 'body' | 'bogie1' | 'bogie2') {
   if (!train.value || !carriage.value) return
   try {
     const path = await chooseModelFile(); if (!path) return; importing.value = true
-    const analysis = await analyzeModelImport(path); if (analysis.missingDependencies.length) throw new Error(`${t('missingDependencies')}: ${analysis.missingDependencies.join(', ')}`)
-    const result = await importModel(train.value.id, carriage.value.id, slot, path); hydrating = true; train.value = result.train; assets.value[result.asset.id] = result.asset; selectedLayerId.value = [...carriage.value.bodyModels, ...carriage.value.bogie1Models, ...carriage.value.bogie2Models].at(-1)?.id || ''; await nextTick(); hydrating = false; emit('status', 'saved')
+    const dependencyOverrides: Record<string,string> = {}; let analysis = await analyzeModelImport(path, dependencyOverrides)
+    while (analysis.missingDependencies.length) { for (const missing of analysis.missingDependencies) { const name = missing.split(/[\\/]/).pop() || missing; const resolved = await chooseModelDependency(name); if (!resolved) throw new Error(`${t('missingDependencies')}: ${name}`); dependencyOverrides[name] = resolved } analysis = await analyzeModelImport(path, dependencyOverrides) }
+    const result = await importModel(train.value.id, carriage.value.id, slot, path, dependencyOverrides); hydrating = true; train.value = result.train; assets.value[result.asset.id] = result.asset; selectedLayerId.value = [...carriage.value.bodyModels, ...carriage.value.bogie1Models, ...carriage.value.bogie2Models].at(-1)?.id || ''; await nextTick(); hydrating = false; emit('status', 'saved')
   } catch (cause) { emit('error', message(cause)); emit('status', 'failed') } finally { importing.value = false }
 }
 function message(cause: unknown) { return cause instanceof Error ? cause.message : String(cause) }
