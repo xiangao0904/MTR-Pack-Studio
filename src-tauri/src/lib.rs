@@ -1,6 +1,8 @@
 mod container;
+mod domain;
 
 use container::{has_project_magic, is_project_path, Container, ContentEntry};
+use domain::{slugify, TrainDefinition};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -23,7 +25,7 @@ struct ProjectSummary {
 #[serde(rename_all = "camelCase")]
 struct ProjectData {
     name: String,
-    target: String,
+    namespace: String,
     description: String,
     content: Vec<ContentEntry>,
     path: String,
@@ -85,7 +87,7 @@ fn lock_error() -> String {
 fn project_data(container: &Container) -> ProjectData {
     ProjectData {
         name: container.index.name.clone(),
-        target: container.index.target.clone(),
+        namespace: container.index.namespace.clone(),
         description: container.index.description.clone(),
         content: container.index.content.clone(),
         path: container.path().to_string_lossy().into_owned(),
@@ -108,6 +110,38 @@ fn validate_project_name(name: &str) -> Result<&str, String> {
     } else {
         Ok(name)
     }
+}
+
+fn validate_resource_id(value: &str) -> Result<&str, String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 80 || !value.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || matches!(character, '_' | '-' | '.')) {
+        Err("Use lowercase letters, numbers, dots, underscores, or hyphens for the export ID.".into())
+    } else { Ok(value) }
+}
+
+fn train_entry_index(container: &Container, id: &str) -> Result<usize, String> {
+    container.index.content.iter().position(|item| item.kind == "train" && item.id == id)
+        .ok_or_else(|| "The selected train no longer exists.".to_string())
+}
+
+fn read_train_document(container: &mut Container, index: usize) -> Result<TrainDefinition, String> {
+    let entry = container.index.content.get(index).cloned().ok_or_else(|| "The selected train no longer exists.".to_string())?;
+    let hash = entry.resources.first().ok_or_else(|| "The train document is missing.".to_string())?;
+    let bytes = container.read_blob(hash)?;
+    if let Ok(train) = serde_json::from_slice::<TrainDefinition>(&bytes) { return Ok(train); }
+    let legacy: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("Invalid train document: {e}"))?;
+    let name = legacy.get("name").and_then(|value| value.as_str()).unwrap_or(&entry.name);
+    let mut train = TrainDefinition::new(name, &slugify(name, "train"));
+    train.id = entry.id;
+    Ok(train)
+}
+
+fn write_train_document(container: &mut Container, index: usize, train: &TrainDefinition) -> Result<ContentEntry, String> {
+    let bytes = serde_json::to_vec(train).map_err(|e| e.to_string())?;
+    let hash = container.put_blob(&bytes, "application/vnd.mtrpack.train+json")?;
+    let entry = container.index.content.get_mut(index).ok_or_else(|| "The selected train no longer exists.".to_string())?;
+    entry.name = train.name.clone(); entry.updated_at = now_ms() as u128; entry.resources = vec![hash];
+    Ok(entry.clone())
 }
 
 fn recent_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -191,13 +225,9 @@ fn create_project(
     state: State<AppState>,
     path: String,
     name: String,
-    target: String,
 ) -> Result<ProjectData, String> {
     let name = validate_project_name(&name)?;
-    if target != "mtr4" {
-        return Err("This version can only create MTR 4 projects.".into());
-    }
-    let container = Container::create(Path::new(&path), name, &target)?;
+    let container = Container::create(Path::new(&path), name)?;
     let summary = project_summary(&container);
     let data = replace_active(&state, container)?;
     remember(&app, summary)?;
@@ -238,7 +268,7 @@ fn get_active_project(state: State<AppState>) -> Result<Option<ProjectData>, Str
 }
 
 #[tauri::command]
-fn create_train(state: State<AppState>, name: String) -> Result<ContentEntry, String> {
+fn create_train(state: State<AppState>, name: String, export_id: String) -> Result<ContentEntry, String> {
     let name = name.trim();
     if name.is_empty() || name.len() > 80 {
         return Err("Enter a train name up to 80 characters.".into());
@@ -247,9 +277,12 @@ fn create_train(state: State<AppState>, name: String) -> Result<ContentEntry, St
     let session = active
         .as_mut()
         .ok_or_else(|| "Open a project before creating content.".to_string())?;
+    let export_id = validate_resource_id(&export_id)?;
     let previous_index = session.container.index.clone();
-    let id = format!("train-{}-{}", now_ms(), previous_index.content.len());
-    let config = serde_json::to_vec(&serde_json::json!({ "id": id, "name": name, "model": null, "texture": null, "properties": {} })).map_err(|e| e.to_string())?;
+    if previous_index.content.iter().any(|entry| entry.kind == "train" && entry.name.eq_ignore_ascii_case(name)) { return Err("A train with this name already exists.".into()); }
+    let train = TrainDefinition::new(name, export_id);
+    let id = train.id.clone();
+    let config = serde_json::to_vec(&train).map_err(|e| e.to_string())?;
     let resource = session.container.put_blob(&config, "application/json")?;
     let entry = ContentEntry {
         id: id.clone(),
@@ -268,6 +301,40 @@ fn create_train(state: State<AppState>, name: String) -> Result<ContentEntry, St
         let _ = session.container.compact();
     }
     Ok(entry)
+}
+
+#[tauri::command]
+fn get_train(state: State<AppState>, train_id: String) -> Result<TrainDefinition, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let session = active.as_mut().ok_or_else(|| "Open a project before editing a train.".to_string())?;
+    let index = train_entry_index(&session.container, &train_id)?;
+    read_train_document(&mut session.container, index)
+}
+
+#[tauri::command]
+fn update_train(state: State<AppState>, mut train: TrainDefinition, expected_revision: u64) -> Result<TrainDefinition, String> {
+    validate_project_name(&train.name)?; validate_resource_id(&train.export_id)?;
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let session = active.as_mut().ok_or_else(|| "Open a project before editing a train.".to_string())?;
+    let index = train_entry_index(&session.container, &train.id)?;
+    let current = read_train_document(&mut session.container, index)?;
+    if current.revision != expected_revision { return Err("This train changed since it was opened. Reload it before saving again.".into()); }
+    if session.container.index.content.iter().enumerate().any(|(position, entry)| position != index && entry.kind == "train" && entry.name.eq_ignore_ascii_case(&train.name)) { return Err("A train with this name already exists.".into()); }
+    train.revision = expected_revision.checked_add(1).ok_or_else(|| "Train revision overflow.".to_string())?;
+    let previous = session.container.index.clone();
+    write_train_document(&mut session.container, index, &train)?;
+    if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
+    Ok(train)
+}
+
+#[tauri::command]
+fn delete_train(state: State<AppState>, train_id: String) -> Result<(), String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let session = active.as_mut().ok_or_else(|| "Open a project before deleting a train.".to_string())?;
+    let index = train_entry_index(&session.container, &train_id)?;
+    let previous = session.container.index.clone(); session.container.index.content.remove(index);
+    if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
+    Ok(())
 }
 
 #[tauri::command]
@@ -324,6 +391,9 @@ pub fn run() {
             open_project,
             get_active_project,
             create_train,
+            get_train,
+            update_train,
+            delete_train,
             save_project,
             close_project,
             take_pending_project_path
@@ -339,7 +409,7 @@ mod tests {
     #[test]
     fn project_name_is_independent_from_file_name() {
         let path = std::env::temp_dir().join(format!("renamed-{}.mtrpack", now_ms()));
-        let container = Container::create(&path, "Internal Name", "mtr4").unwrap();
+        let container = Container::create(&path, "Internal Name").unwrap();
         assert_eq!(container.index.name, "Internal Name");
         drop(container);
         let renamed = path.with_file_name(format!("different-{}.mtrpack", now_ms()));
@@ -354,7 +424,7 @@ mod tests {
     #[test]
     fn startup_arguments_only_accept_valid_project_files() {
         let path = std::env::temp_dir().join(format!("argument-{}.mtrpack", now_ms()));
-        drop(Container::create(&path, "Argument", "mtr4").unwrap());
+        drop(Container::create(&path, "Argument").unwrap());
         let selected = project_path_from_arguments([
             std::ffi::OsString::from("app.exe"),
             path.clone().into_os_string(),

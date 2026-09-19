@@ -91,7 +91,7 @@ function formatDate(timestamp: number) {
         <template v-if="!loading && data">
           <template v-if="section === 'overview'">
             <div class="workspace-heading"><div><h1>{{ t('projectOverview') }}</h1><p>{{ t('overviewSubtitle') }}</p></div><button class="new-train" @click="creating = true"><Plus :size="22" />{{ t('newTrain') }}</button></div>
-            <section class="summary-card"><span class="summary-label">{{ t('projectLabel') }}</span><h2>{{ data.name }}</h2><p>{{ data.description || t('projectSummary') }}</p><span class="summary-target">{{ t('packEyebrow') }}</span></section>
+            <section class="summary-card"><span class="summary-label">{{ t('projectLabel') }}</span><h2>{{ data.name }}</h2><p>{{ data.description || t('projectSummary') }}</p><span class="summary-target">{{ data.namespace }}</span></section>
             <section class="content-types"><h2>{{ t('contentTypes') }}</h2><p>{{ t('contentTypesHint') }}</p><div class="type-cards">
               <button class="type-card" @click="section = 'trains'"><TrainFront :size="30" /><span><strong>{{ t('trains') }}</strong><small>{{ t('trainTypeHint') }}</small></span><ArrowRight :size="18" /></button>
               <button class="type-card planned-card" @click="section = 'objects'"><Trees :size="30" /><span><strong>{{ t('decorativeObjects') }}</strong><small>{{ t('objectTypeHint') }}</small></span><em>{{ t('planned') }}</em></button>

@@ -55,7 +55,10 @@ pub struct ProjectIndex {
     pub project_id: Uuid,
     pub name: String,
     pub description: String,
+    #[serde(default)]
     pub target: String,
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
     pub content: Vec<ContentEntry>,
     pub blobs: BTreeMap<String, BlobLocation>,
 }
@@ -91,7 +94,7 @@ pub struct Container {
 }
 
 impl Container {
-    pub fn create(path: &Path, name: &str, target: &str) -> Result<Self, String> {
+    pub fn create(path: &Path, name: &str) -> Result<Self, String> {
         let path = with_extension(path);
         let parent = path
             .parent()
@@ -114,7 +117,8 @@ impl Container {
             project_id,
             name: name.to_string(),
             description: String::new(),
-            target: target.to_string(),
+            target: String::new(),
+            namespace: crate::domain::slugify(name, "mtr_pack"),
             content: Vec::new(),
             blobs: BTreeMap::new(),
         };
@@ -365,6 +369,8 @@ impl Container {
         Ok(())
     }
 }
+
+fn default_namespace() -> String { "mtr_pack".into() }
 
 pub fn is_project_path(path: &Path) -> bool {
     path.extension()
@@ -676,7 +682,7 @@ mod tests {
     #[test]
     fn creates_fixed_header_and_reopens_index() {
         let path = test_path("header");
-        let container = Container::create(&path, "Urban Rail", "mtr4").unwrap();
+        let container = Container::create(&path, "Urban Rail").unwrap();
         assert_eq!(container.index.name, "Urban Rail");
         assert_eq!(container.index.generation, 1);
         drop(container);
@@ -690,7 +696,7 @@ mod tests {
     #[test]
     fn deduplicates_equal_resources() {
         let path = test_path("dedupe");
-        let mut container = Container::create(&path, "Test", "mtr4").unwrap();
+        let mut container = Container::create(&path, "Test").unwrap();
         let first = container
             .put_blob(b"same model data", "model/gltf+json")
             .unwrap();
@@ -707,7 +713,7 @@ mod tests {
     #[test]
     fn falls_back_when_newest_checkpoint_is_torn() {
         let path = test_path("recover");
-        let mut container = Container::create(&path, "Test", "mtr4").unwrap();
+        let mut container = Container::create(&path, "Test").unwrap();
         container.index.description = "second generation".into();
         container.commit().unwrap();
         let active_offset = if container.active_slot == 0 {
@@ -731,7 +737,7 @@ mod tests {
     #[test]
     fn rejects_unknown_container_version_and_oversized_record() {
         let path = test_path("invalid");
-        let container = Container::create(&path, "Test", "mtr4").unwrap();
+        let container = Container::create(&path, "Test").unwrap();
         drop(container);
         let mut file = OpenOptions::new()
             .read(true)
@@ -750,7 +756,7 @@ mod tests {
     #[test]
     fn compaction_keeps_live_content() {
         let path = test_path("compact");
-        let mut container = Container::create(&path, "Test", "mtr4").unwrap();
+        let mut container = Container::create(&path, "Test").unwrap();
         let hash = container
             .put_blob(&vec![b'a'; 16_384], "application/json")
             .unwrap();

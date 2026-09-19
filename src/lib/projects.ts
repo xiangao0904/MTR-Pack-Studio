@@ -3,7 +3,15 @@ import { open, save } from '@tauri-apps/plugin-dialog'
 
 export interface ProjectSummary { name: string; path: string; lastOpened: number }
 export interface ContentEntry { id: string; kind: string; name: string; file: string; updatedAt: number; resources?: string[] }
-export interface ProjectData { name: string; target: string; description: string; content: ContentEntry[]; path: string; recovered: boolean }
+export interface ProjectData { name: string; namespace: string; description: string; content: ContentEntry[]; path: string; recovered: boolean }
+export type PlacementPreset = 'all' | 'first' | 'last' | 'odd' | 'even' | 'every' | 'custom'
+export interface CarPlacementRule { preset: PlacementPreset; every?: number; offset: number; whitelist: string; blacklist: string }
+export interface EndConfiguration { gangway: boolean; barrier: boolean }
+export interface MaterialBinding { materialId: string; textureAssetId?: string }
+export interface ModelLayer { id: string; name: string; assetId: string; flipTextureV: boolean; visible: boolean; materialBindings: MaterialBinding[]; partRules: Record<string, CarPlacementRule> }
+export interface CarriageDefinition { id: string; exportId: string; name: string; length: number; width: number; bogie1Position: number; bogie2Position: number; couplingPadding1: number; couplingPadding2: number; end1: EndConfiguration; end2: EndConfiguration; placement: CarPlacementRule; bodyModels: ModelLayer[]; bogie1Models: ModelLayer[]; bogie2Models: ModelLayer[] }
+export interface PreviewCarriage { carriageId: string; reversed: boolean }
+export interface TrainDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; tags: string[]; mtr3BaseTrainType: string; carriages: CarriageDefinition[]; previewConsist: PreviewCarriage[] }
 
 const recentKey = 'mtr-pack-studio:recent-projects'
 const inTauri = () => '__TAURI_INTERNALS__' in window
@@ -30,8 +38,8 @@ export async function chooseProjectSavePath(name: string): Promise<string | null
 
 export async function createProject(name: string, path: string): Promise<ProjectSummary> {
   const resolvedPath = ensureExtension(path)
-  if (inTauri()) return summaryFromData(await invoke<ProjectData>('create_project', { path: resolvedPath, name, target: 'mtr4' }))
-  const project: ProjectData = { name, path: resolvedPath, target: 'mtr4', description: '', content: [], recovered: false }
+  if (inTauri()) return summaryFromData(await invoke<ProjectData>('create_project', { path: resolvedPath, name }))
+  const project: ProjectData = { name, path: resolvedPath, namespace: slug(name, 'mtr_pack'), description: '', content: [], recovered: false }
   localStorage.setItem(dataKey(resolvedPath), JSON.stringify(project))
   const summary = summaryFromData(project)
   rememberBrowser(summary)
@@ -64,14 +72,45 @@ export async function getProject(path: string): Promise<ProjectData> {
   return JSON.parse(stored) as ProjectData
 }
 
-export async function createTrain(path: string, name: string): Promise<ContentEntry> {
-  if (inTauri()) return invoke<ContentEntry>('create_train', { name })
+function slug(value: string, fallback: string) { return value.toLowerCase().replace(/[^a-z0-9_.-]+/g, '_').replace(/^_+|_+$/g, '') || fallback }
+function emptyRule(): CarPlacementRule { return { preset: 'all', offset: 0, whitelist: '', blacklist: '' } }
+function browserTrain(name: string, exportId: string): TrainDefinition {
+  const id = crypto.randomUUID(); const carriageId = crypto.randomUUID()
+  return { id, revision: 1, exportId, name, description: '', color: 'FFFFFF', tags: [], mtr3BaseTrainType: '', previewConsist: [{ carriageId, reversed: false }], carriages: [{ id: carriageId, exportId: 'carriage', name: 'Carriage', length: 20, width: 3, bogie1Position: 7, bogie2Position: -7, couplingPadding1: 0, couplingPadding2: 0, end1: { gangway: false, barrier: false }, end2: { gangway: false, barrier: false }, placement: emptyRule(), bodyModels: [], bogie1Models: [], bogie2Models: [] }] }
+}
+
+export async function createTrain(path: string, name: string, exportId = slug(name, 'train')): Promise<ContentEntry> {
+  if (inTauri()) return invoke<ContentEntry>('create_train', { name, exportId })
   const project = await getProject(path)
-  const id = `train-${Date.now()}`
+  const train = browserTrain(name, exportId); const id = train.id
   const entry = { id, kind: 'train', name, file: `content/trains/${id}.json`, updatedAt: Date.now(), resources: [] }
   project.content.push(entry)
   localStorage.setItem(dataKey(path), JSON.stringify(project))
+  localStorage.setItem(`${dataKey(path)}:train:${id}`, JSON.stringify(train))
   return entry
+}
+
+export async function getTrain(path: string, trainId: string): Promise<TrainDefinition> {
+  if (inTauri()) return invoke<TrainDefinition>('get_train', { trainId })
+  const value = localStorage.getItem(`${dataKey(path)}:train:${trainId}`)
+  if (!value) throw new Error('The browser preview train could not be found.')
+  return JSON.parse(value) as TrainDefinition
+}
+
+export async function updateTrain(path: string, train: TrainDefinition, expectedRevision: number): Promise<TrainDefinition> {
+  if (inTauri()) return invoke<TrainDefinition>('update_train', { train, expectedRevision })
+  const project = await getProject(path); const current = await getTrain(path, train.id)
+  if (current.revision !== expectedRevision) throw new Error('This train changed since it was opened. Reload it before saving again.')
+  const updated = { ...train, revision: expectedRevision + 1 }; const entry = project.content.find(item => item.id === train.id)
+  if (entry) { entry.name = updated.name; entry.updatedAt = Date.now() }
+  localStorage.setItem(dataKey(path), JSON.stringify(project)); localStorage.setItem(`${dataKey(path)}:train:${train.id}`, JSON.stringify(updated))
+  return updated
+}
+
+export async function deleteTrain(path: string, trainId: string): Promise<void> {
+  if (inTauri()) return invoke('delete_train', { trainId })
+  const project = await getProject(path); project.content = project.content.filter(item => item.id !== trainId)
+  localStorage.setItem(dataKey(path), JSON.stringify(project)); localStorage.removeItem(`${dataKey(path)}:train:${trainId}`)
 }
 
 export async function saveProject(): Promise<void> {
