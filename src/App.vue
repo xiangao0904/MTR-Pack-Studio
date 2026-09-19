@@ -4,7 +4,7 @@ import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { t } from './i18n'
 import ProjectWorkspace from './components/ProjectWorkspace.vue'
-import { chooseParentDirectory, createProject, loadRecentProjects, openProject, removeRecentProject, type ProjectSummary } from './lib/projects'
+import { chooseProjectSavePath, closeProject, createProject, loadRecentProjects, openProject, removeRecentProject, saveProject, takePendingProjectPath, type ProjectSummary } from './lib/projects'
 
 type Page = 'home' | 'recent' | 'all'
 const page = ref<Page>('home')
@@ -13,14 +13,30 @@ const projects = ref<ProjectSummary[]>([])
 const query = ref('')
 const creating = ref(false)
 const projectName = ref('')
-const projectParent = ref('')
+const projectFile = ref('')
 const busy = ref(false)
 const notice = ref('')
 const menuFor = ref<string | null>(null)
 const activeProject = ref<ProjectSummary | null>(null)
 const filteredProjects = computed(() => projects.value.filter(project => `${project.name} ${project.path}`.toLowerCase().includes(query.value.toLowerCase())))
 
-onMounted(refreshProjects)
+let forceClose = false
+onMounted(async () => {
+  await refreshProjects()
+  if (isDesktop) {
+    await getCurrentWindow().onCloseRequested(async event => {
+      if (forceClose) return
+      event.preventDefault()
+      try {
+        if (activeProject.value) await saveProject()
+        forceClose = true
+        await getCurrentWindow().close()
+      } catch (error) { showError(error) }
+    })
+    const pending = await takePendingProjectPath()
+    if (pending) await openExternalProject(pending)
+  }
+})
 async function refreshProjects() { try { projects.value = await loadRecentProjects() } catch (error) { showError(error) } }
 function showError(error: unknown) { notice.value = error instanceof Error ? error.message : String(error) }
 const isDesktop = '__TAURI_INTERNALS__' in window
@@ -39,16 +55,21 @@ async function chooseProject() {
   try { busy.value = true; const project = await openProject(); if (project) { activeProject.value = project; await refreshProjects() } }
   catch (error) { showError(error) } finally { busy.value = false }
 }
-async function chooseParent() {
-  try { const folder = await chooseParentDirectory(); if (folder) projectParent.value = folder }
+async function chooseProjectFile() {
+  try { const path = await chooseProjectSavePath(projectName.value.trim() || 'Untitled Project'); if (path) projectFile.value = path }
   catch (error) { showError(error) }
 }
 async function submitProject() {
   if (!projectName.value.trim()) return
   try {
     busy.value = true
-    activeProject.value = await createProject(projectName.value.trim(), projectParent.value.trim())
-    creating.value = false; projectName.value = ''; projectParent.value = ''
+    if (!projectFile.value.trim()) {
+      const path = await chooseProjectSavePath(projectName.value.trim())
+      if (!path) return
+      projectFile.value = path
+    }
+    activeProject.value = await createProject(projectName.value.trim(), projectFile.value.trim())
+    creating.value = false; projectName.value = ''; projectFile.value = ''
     await refreshProjects()
   } catch (error) { showError(error) } finally { busy.value = false }
 }
@@ -57,6 +78,17 @@ async function reopenProject(project: ProjectSummary) {
 }
 async function forgetProject(path: string) {
   try { await removeRecentProject(path); menuFor.value = null; await refreshProjects() } catch (error) { showError(error) }
+}
+async function returnHome() {
+  try { await saveProject(); await closeProject(); activeProject.value = null; await refreshProjects() } catch (error) { showError(error) }
+}
+async function openExternalProject(path: string) {
+  try {
+    if (activeProject.value) await saveProject()
+    const project = await openProject(path)
+    if (project) activeProject.value = project
+    await refreshProjects()
+  } catch (error) { showError(error) }
 }
 function dateLabel(timestamp: number) {
   const date = new Date(timestamp)
@@ -90,8 +122,8 @@ function dateLabel(timestamp: number) {
         </section><button class="drop-zone" @click="chooseProject"><Folder :size="31" /><span><strong>{{ t('drop') }}</strong><small>{{ t('dropHint') }}</small></span></button>
       </div><footer class="statusbar"><span><Info :size="17" />{{ t('tip') }}</span><span>✦ &nbsp; {{ t('footerCredit') }}</span></footer></main>
     </div>
-    <ProjectWorkspace v-else :project="activeProject" @back="activeProject = null" />
-    <div v-if="creating" class="modal-scrim" @click.self="creating = false"><form class="create-modal" @submit.prevent="submitProject"><div class="modal-head"><div><span class="eyebrow">{{ t('packEyebrow') }}</span><h2>{{ t('create') }}</h2></div><button type="button" class="close-button" @click="creating = false"><X :size="20" /></button></div><label>{{ t('name') }}<input v-model="projectName" autofocus maxlength="80" :placeholder="t('newPlaceholder')" /></label><label>{{ t('parent') }}<span class="folder-field"><input v-model="projectParent" :placeholder="t('parentHint')" /><button type="button" @click="chooseParent">{{ t('browse') }}</button></span></label><p>{{ t('newFolderHint') }}</p><div class="modal-actions"><button type="button" class="cancel-button" @click="creating = false">{{ t('cancel') }}</button><button class="create-button" type="submit" :disabled="busy || !projectName.trim()">{{ t('create') }}</button></div></form></div>
+    <ProjectWorkspace v-else :project="activeProject" @back="returnHome" />
+    <div v-if="creating" class="modal-scrim" @click.self="creating = false"><form class="create-modal" @submit.prevent="submitProject"><div class="modal-head"><div><span class="eyebrow">{{ t('packEyebrow') }}</span><h2>{{ t('create') }}</h2></div><button type="button" class="close-button" @click="creating = false"><X :size="20" /></button></div><label>{{ t('name') }}<input v-model="projectName" autofocus maxlength="80" :placeholder="t('newPlaceholder')" /></label><label>{{ t('projectFile') }}<span class="folder-field"><input v-model="projectFile" :placeholder="t('projectFileHint')" /><button type="button" @click="chooseProjectFile">{{ t('browse') }}</button></span></label><p>{{ t('projectFileHelp') }}</p><div class="modal-actions"><button type="button" class="cancel-button" @click="creating = false">{{ t('cancel') }}</button><button class="create-button" type="submit" :disabled="busy || !projectName.trim()">{{ t('create') }}</button></div></form></div>
     <div v-if="notice" class="toast" role="alert">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
   </div>
 </template>
