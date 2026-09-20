@@ -37,6 +37,13 @@ const en = {
   namespace: 'Minecraft namespace', namespaceHint: 'Lowercase letters, numbers, dots, underscores and hyphens only.', saveSettings: 'Save settings', settingsSaved: 'Project settings saved.',
   exportTarget: 'Export target', minecraftVersion: 'Minecraft version', modelFormat: 'Model format', validating: 'Validating…', continueExport: 'Validate and export', exportComplete: 'Resource pack exported with', files: 'files.',
   locateDependency: 'Locate dependency:', browserExportWarning: 'Browser preview validates the workflow but does not create binary resource packs.', exportDialogTitle: 'Export MTR Resource Pack', resourcePack: 'Resource Pack',
+  undo: 'Undo', redo: 'Redo', select: 'Select', move: 'Move', rotate: 'Rotate', scale: 'Scale', grid: 'Grid', wireframe: 'Wireframe', fitView: 'Fit View',
+  searchCarriages: 'Search carriages...', add: 'Add', moveUp: 'Move up', moveDown: 'Move down', duplicate: 'Duplicate', delete: 'Delete',
+  modelTree: 'Model Tree', materials: 'Materials', searchParts: 'Search parts...', visible: 'Visible', carriage: 'Carriage', modelLayer: 'Model layer', selectModelLayer: 'Select a model layer to inspect its resources.', dependencies: 'dependencies',
+  modelLayers: 'model layers', triangles: 'triangles', unitsMetres: 'Units: metres', forward: 'forward', gridSize: 'Grid: 1 m', train: 'Train', selectedCarriage: 'Selected carriage',
+  fieldName: 'Name',
+  body: 'Body Model', frontBogie: 'Front Bogie', rearBogie: 'Rear Bogie', import: 'Import', addLayer: 'Add layer', noModelAssigned: 'No model assigned', uvFlip: 'UV Flip', materialBindings: 'Material Bindings', mtr3Short: 'MTR 3',
+  partPlacementHint: 'This rule overrides the carriage rule for the selected part.', carriagePlacementHint: 'Choose where this carriage is used when exporting to MTR 3 and NTE.',
 } as const
 export type MessageKey = keyof typeof en
 export const t = (key: MessageKey) => en[key]
