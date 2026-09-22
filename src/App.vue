@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, Minus, MoreHorizontal, Plus, Search, Settings2, Square, TrainFront, X } from '@lucide/vue'
+import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, Minus, MoreHorizontal, Plus, Search, Settings2, Square, X } from '@lucide/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { t } from './i18n'
 import ProjectWorkspace from './components/ProjectWorkspace.vue'
+import ProjectArtwork from './components/ProjectArtwork.vue'
 import { chooseProjectSavePath, closeProject, createProject, loadRecentProjects, openProject, removeRecentProject, saveProject, takePendingProjectPath, type ProjectSummary } from './lib/projects'
 
 type Page = 'home' | 'recent' | 'all'
@@ -19,6 +20,7 @@ const busy = ref(false)
 const notice = ref('')
 const menuFor = ref<string | null>(null)
 const activeProject = ref<ProjectSummary | null>(null)
+const workspace = ref<{ flush: () => Promise<void> }>()
 const filteredProjects = computed(() => projects.value.filter(project => `${project.name} ${project.path}`.toLowerCase().includes(query.value.toLowerCase())))
 
 let forceClose = false
@@ -33,7 +35,7 @@ onMounted(async () => {
       if (forceClose) return
       event.preventDefault()
       try {
-        if (activeProject.value) await saveProject()
+        if (activeProject.value) await flushWorkspace()
         forceClose = true
         await getCurrentWindow().close()
       } catch (error) { showError(error) }
@@ -43,6 +45,7 @@ onMounted(async () => {
   }
 })
 async function refreshProjects() { try { projects.value = await loadRecentProjects() } catch (error) { showError(error) } }
+async function flushWorkspace() { if (workspace.value) await workspace.value.flush(); else await saveProject() }
 function showError(error: unknown) { notice.value = error instanceof Error ? error.message : String(error) }
 const isDesktop = '__TAURI_INTERNALS__' in window
 async function windowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
@@ -57,7 +60,7 @@ async function dragTitlebar(event: MouseEvent) {
   } catch (error) { showError(error) }
 }
 async function chooseProject() {
-  try { busy.value = true; const project = await openProject(); if (project) { activeProject.value = project; await refreshProjects() } }
+  try { busy.value = true; if (activeProject.value) await flushWorkspace(); const project = await openProject(); if (project) { activeProject.value = project; await refreshProjects() } }
   catch (error) { showError(error) } finally { busy.value = false }
 }
 async function chooseProjectFile() {
@@ -68,6 +71,7 @@ async function submitProject() {
   if (!projectName.value.trim()) return
   try {
     busy.value = true
+    if (activeProject.value) await flushWorkspace()
     if (!projectFile.value.trim()) {
       const path = await chooseProjectSavePath(projectName.value.trim())
       if (!path) return
@@ -79,17 +83,18 @@ async function submitProject() {
   } catch (error) { showError(error) } finally { busy.value = false }
 }
 async function reopenProject(project: ProjectSummary) {
-  try { activeProject.value = await openProject(project.path); await refreshProjects() } catch (error) { showError(error) }
+  try { if (activeProject.value) await flushWorkspace(); activeProject.value = await openProject(project.path); await refreshProjects() } catch (error) { showError(error) }
 }
 async function forgetProject(path: string) {
   try { await removeRecentProject(path); menuFor.value = null; await refreshProjects() } catch (error) { showError(error) }
 }
 async function returnHome() {
-  try { await saveProject(); await closeProject(); activeProject.value = null; await refreshProjects() } catch (error) { showError(error) }
+  try { await flushWorkspace(); await closeProject(); activeProject.value = null; await refreshProjects() } catch (error) { showError(error) }
 }
 async function openExternalProject(path: string) {
   try {
-    if (activeProject.value) await saveProject()
+    if (activeProject.value?.path === path) return
+    if (activeProject.value) await flushWorkspace()
     const project = await openProject(path)
     if (project) activeProject.value = project
     await refreshProjects()
@@ -122,12 +127,12 @@ function dateLabel(timestamp: number) {
           <button class="quick-card secondary" @click="chooseProject"><Folder :size="33" /><span><strong>{{ t('openProject') }}</strong><small>{{ t('openHint') }}</small></span><ArrowRight class="quick-arrow" :size="21" /></button>
         </div></section>
         <section class="projects-section"><div class="section-heading"><div><span class="eyebrow">{{ page === 'all' ? t('libraryEyebrow') : t('recentEyebrow') }}</span><h2>{{ page === 'all' ? t('allProjects') : t('recentProjects') }}</h2></div><div class="section-tools"><label class="search-box"><Search :size="18" /><input v-model="query" :placeholder="t('search')" /></label><div class="view-toggle"><button :class="{ active: view === 'grid' }" :aria-label="t('gridView')" @click="view = 'grid'"><Grid2X2 :size="19" /></button><button :class="{ active: view === 'list' }" :aria-label="t('listView')" @click="view = 'list'"><List :size="20" /></button></div></div></div>
-          <div v-if="filteredProjects.length" :class="['project-collection', view]"><div v-if="view === 'list'" class="list-header"><span>{{ t('name') }}</span><span>{{ t('lastOpened') }}</span><span>{{ t('location') }}</span></div><div v-for="project in filteredProjects" :key="project.path" class="project-row" @click="reopenProject(project)"><div class="project-identity"><div class="project-thumb"><TrainFront :size="27" /></div><div><strong>{{ project.name }}</strong><small>{{ t('pack') }}</small></div></div><span class="project-date">{{ dateLabel(project.lastOpened) }}</span><span class="project-path" :title="project.path">{{ project.path }}</span><div class="row-menu"><button :aria-label="t('more')" @click.stop="menuFor = menuFor === project.path ? null : project.path"><MoreHorizontal :size="20" /></button><div v-if="menuFor === project.path" class="menu-popover"><button @click.stop="forgetProject(project.path)">{{ t('remove') }}</button></div></div></div></div>
+          <div v-if="filteredProjects.length" :class="['project-collection', view]"><div v-if="view === 'list'" class="list-header"><span>{{ t('name') }}</span><span>{{ t('lastOpened') }}</span><span>{{ t('location') }}</span></div><div v-for="project in filteredProjects" :key="project.path" class="project-row" @click="reopenProject(project)"><div class="project-identity"><div class="project-thumb"><ProjectArtwork :path="project.path" :revision="project.lastOpened" /></div><div><strong>{{ project.name }}</strong><small>{{ t('pack') }}</small></div></div><span class="project-date">{{ dateLabel(project.lastOpened) }}</span><span class="project-path" :title="project.path">{{ project.path }}</span><div class="row-menu"><button :aria-label="t('more')" @click.stop="menuFor = menuFor === project.path ? null : project.path"><MoreHorizontal :size="20" /></button><div v-if="menuFor === project.path" class="menu-popover"><button @click.stop="forgetProject(project.path)">{{ t('remove') }}</button></div></div></div></div>
           <div v-else class="empty-projects"><FolderOpen :size="36" :stroke-width="1.4" /><strong>{{ query ? t('noMatches') : t('empty') }}</strong><span>{{ query ? t('trySearch') : t('emptyHint') }}</span></div>
         </section><button class="drop-zone" @click="chooseProject"><Folder :size="31" /><span><strong>{{ t('drop') }}</strong><small>{{ t('dropHint') }}</small></span></button>
       </div><footer class="statusbar"><span><Info :size="17" />{{ t('tip') }}</span><span>✦ &nbsp; {{ t('footerCredit') }}</span></footer></main>
     </div>
-    <ProjectWorkspace v-else :project="activeProject" @back="returnHome" />
+    <ProjectWorkspace v-else ref="workspace" :key="activeProject.path" :project="activeProject" @back="returnHome" />
     <div v-if="creating" class="modal-scrim" @click.self="creating = false"><form class="create-modal" @submit.prevent="submitProject"><div class="modal-head"><div><span class="eyebrow">{{ t('packEyebrow') }}</span><h2>{{ t('create') }}</h2></div><button type="button" class="close-button" @click="creating = false"><X :size="20" /></button></div><label>{{ t('name') }}<input v-model="projectName" autofocus maxlength="80" :placeholder="t('newPlaceholder')" /></label><label>{{ t('projectFile') }}<span class="folder-field"><input v-model="projectFile" :placeholder="t('projectFileHint')" /><button type="button" @click="chooseProjectFile">{{ t('browse') }}</button></span></label><p>{{ t('projectFileHelp') }}</p><div class="modal-actions"><button type="button" class="cancel-button" @click="creating = false">{{ t('cancel') }}</button><button class="create-button" type="submit" :disabled="busy || !projectName.trim()">{{ t('create') }}</button></div></form></div>
     <div v-if="notice" class="toast" role="alert">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
   </div>

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { AlertTriangle, ArrowRight, Box, Database, Folder, Home, Monitor, MoreHorizontal, Plus, Search, Settings2, TrainFront, Trees, Upload, X } from '@lucide/vue'
+import { AlertTriangle, ArrowRight, Box, Database, Folder, Home, Monitor, MoreHorizontal, Plus, Search, Settings2, TrainFront, TreePine, Upload, X } from '@lucide/vue'
 import { t } from '../i18n'
+import ProjectArtwork from './ProjectArtwork.vue'
 const TrainEditor = defineAsyncComponent(() => import('./TrainEditor.vue'))
-import { chooseExportPath, createTrain, exportResourcePack, getProject, saveProject, updateProjectSettings, validateExport, type ContentEntry, type ExportOptions, type ProjectData, type ProjectSummary, type ValidationIssue } from '../lib/projects'
+import { chooseExportPath, createTrain, exportResourcePack, getProject, saveProject, setProjectCover, updateProjectSettings, validateExport, type ContentEntry, type ExportOptions, type ProjectData, type ProjectSummary, type ValidationIssue } from '../lib/projects'
 
 const props = defineProps<{ project: ProjectSummary }>()
 const emit = defineEmits<{ back: [] }>()
@@ -19,7 +20,17 @@ const busy = ref(false)
 const selectedTrain = ref<ContentEntry | null>(null)
 const notice = ref('')
 const saveStatus = ref<'saving' | 'saved' | 'failed'>('saved')
-const trainEditor = ref<{ flush: () => Promise<void> }>()
+const trainEditor = ref<{ flush: () => Promise<void>; focusIssue: (issue: ValidationIssue) => Promise<void> }>()
+const pendingIssue = ref<ValidationIssue | null>(null)
+const settingsNamespace = ref('')
+const settingsDescription = ref('')
+const coverRevision = ref(0)
+const coverInput = ref<HTMLInputElement>()
+const coverBusy = ref(false)
+let coverWrite: Promise<void> | null = null
+let pendingCover: { file: File | null } | null = null
+let settingsTimer: ReturnType<typeof setTimeout> | undefined
+let settingsWrite: Promise<void> | null = null
 const exportOpen = ref(false)
 const exportBusy = ref(false)
 const exportIssues = ref<ValidationIssue[]>([])
@@ -33,18 +44,33 @@ const sectionTitle = computed(() => ({ all: t('allContentHeading'), trains: t('t
 
 async function load() {
   loading.value = true
-  try { data.value = await getProject(props.project.path); error.value = '' }
+  try { data.value = await getProject(props.project.path); settingsNamespace.value = data.value.namespace; settingsDescription.value = data.value.description; error.value = '' }
   catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
   finally { loading.value = false }
 }
 onMounted(() => { load(); window.addEventListener('keydown', saveShortcut) })
-onBeforeUnmount(() => window.removeEventListener('keydown', saveShortcut))
+onBeforeUnmount(() => { clearTimeout(settingsTimer); window.removeEventListener('keydown', saveShortcut) })
 watch(() => props.project.path, load)
+watch([settingsNamespace, settingsDescription], () => {
+  clearTimeout(settingsTimer)
+  if (!data.value || (settingsNamespace.value === data.value.namespace && settingsDescription.value === data.value.description)) return
+  saveStatus.value = 'saving'
+  settingsTimer = setTimeout(() => { void flushSave().catch(() => {}) }, 800)
+})
 
 async function flushSave() {
   saveStatus.value = 'saving'
-  try { await trainEditor.value?.flush(); await saveProject(); saveStatus.value = 'saved' }
-  catch (cause) { saveStatus.value = 'failed'; error.value = cause instanceof Error ? cause.message : String(cause) }
+  clearTimeout(settingsTimer)
+  try { await trainEditor.value?.flush(); await persistCover(); await persistSettings(); await saveProject(); saveStatus.value = 'saved'; error.value = '' }
+  catch (cause) { saveStatus.value = 'failed'; error.value = cause instanceof Error ? cause.message : String(cause); throw cause }
+}
+defineExpose({ flush: flushSave })
+async function navigate(next: Section) {
+  try { await flushSave(); selectedTrain.value = null; section.value = next } catch { /* The current editor stays open so the user can retry. */ }
+}
+async function leaveTrain() { await navigate('trains') }
+async function openTrain(entry: ContentEntry) {
+  try { await flushSave(); selectedTrain.value = entry; section.value = 'trains' } catch { /* Keep unsaved edits visible. */ }
 }
 function updateEntry(entry: ContentEntry) {
   if (!data.value) return
@@ -56,16 +82,59 @@ function changeTarget() { exportOptions.value.minecraftVersion = exportOptions.v
 async function submitExport() {
   if (!data.value) return
   try {
-    exportBusy.value = true; await trainEditor.value?.flush(); exportIssues.value = await validateExport(exportOptions.value)
+    exportBusy.value = true; await flushSave(); exportIssues.value = await validateExport(exportOptions.value)
     if (exportIssues.value.some(issue => issue.severity === 'error')) return
     const path = await chooseExportPath(data.value.name, exportOptions.value.target); if (!path) return
     const report = await exportResourcePack(path, exportOptions.value); localStorage.setItem('mtr-pack-studio:last-export', JSON.stringify(exportOptions.value)); exportOpen.value = false; notice.value = `${t('exportComplete')} ${report.fileCount} ${t('files')}`
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) } finally { exportBusy.value = false }
 }
-function openIssue(issue: ValidationIssue) { if (!data.value || !issue.trainId) return; const entry = data.value.content.find(item => item.id === issue.trainId); if (entry) { selectedTrain.value = entry; section.value = 'trains'; exportOpen.value = false } }
-async function saveSettings() { if (!data.value) return; try { saveStatus.value = 'saving'; data.value = await updateProjectSettings(props.project.path, data.value.namespace, data.value.description); saveStatus.value = 'saved'; notice.value = t('settingsSaved') } catch (cause) { saveStatus.value = 'failed'; error.value = cause instanceof Error ? cause.message : String(cause) } }
+async function openIssue(issue: ValidationIssue) {
+  if (!data.value) return
+  if (!issue.trainId) { exportOpen.value = false; await navigate('settings'); return }
+  const entry = data.value.content.find(item => item.id === issue.trainId)
+  if (!entry) return
+  try {
+    await flushSave(); pendingIssue.value = issue; exportOpen.value = false
+    if (selectedTrain.value?.id === entry.id && trainEditor.value) await applyPendingIssue()
+    else { selectedTrain.value = entry; section.value = 'trains' }
+  } catch { /* Retain the current document when saving fails. */ }
+}
+async function applyPendingIssue() {
+  if (!pendingIssue.value || !trainEditor.value) return
+  try { await trainEditor.value.focusIssue(pendingIssue.value); pendingIssue.value = null }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
+}
+async function persistSettings() {
+  if (settingsWrite) await settingsWrite
+  if (!data.value || (settingsNamespace.value === data.value.namespace && settingsDescription.value === data.value.description)) return
+  settingsWrite = (async () => {
+    while (data.value && (settingsNamespace.value !== data.value.namespace || settingsDescription.value !== data.value.description)) {
+      const saved = await updateProjectSettings(props.project.path, settingsNamespace.value, settingsDescription.value)
+      data.value.namespace = saved.namespace; data.value.description = saved.description
+    }
+  })()
+  try { await settingsWrite } finally { settingsWrite = null }
+}
+async function saveSettings() { try { await flushSave(); notice.value = t('settingsSaved') } catch { /* Show the error from flushSave. */ } }
+async function changeCover(file: File | null) {
+  if (coverBusy.value) return
+  coverBusy.value = true; saveStatus.value = 'saving'
+  pendingCover = { file }
+  try { await persistCover(); saveStatus.value = 'saved' }
+  catch (cause) { saveStatus.value = 'failed'; error.value = cause instanceof Error ? cause.message : String(cause) }
+  finally { coverBusy.value = false; if (coverInput.value) coverInput.value.value = '' }
+}
+async function persistCover() {
+  if (coverWrite) { await coverWrite; return }
+  if (!pendingCover) return
+  const request = pendingCover
+  coverWrite = setProjectCover(props.project.path, request.file)
+  try { await coverWrite; if (pendingCover === request) pendingCover = null; coverRevision.value++ }
+  finally { coverWrite = null }
+}
+function coverSelected(event: Event) { const file = (event.target as HTMLInputElement).files?.[0]; if (file) void changeCover(file) }
 function saveShortcut(event: KeyboardEvent) {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void flushSave() }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void flushSave().catch(() => {}) }
 }
 
 async function submitTrain() {
@@ -73,6 +142,7 @@ async function submitTrain() {
   busy.value = true
   saveStatus.value = 'saving'
   try {
+    await flushSave()
     await createTrain(props.project.path, trainName.value.trim())
     creating.value = false
     trainName.value = ''
@@ -97,38 +167,38 @@ function formatDate(timestamp: number) {
     </div>
     <div class="workbench-body">
       <aside v-if="!selectedTrain" class="workbench-sidebar">
-        <div class="project-identity"><div class="project-image"><TrainFront :size="31" /></div><div><strong>{{ data?.name || project.name }}</strong><span>{{ t('packEyebrow') }}</span></div></div>
+        <div class="project-identity"><div class="project-image"><ProjectArtwork :path="project.path" :revision="coverRevision" /></div><div><strong>{{ data?.name || project.name }}</strong><span>{{ t('packEyebrow') }}</span></div></div>
         <nav :aria-label="t('allContent')">
-          <button :class="['work-nav', { active: section === 'overview' }]" @click="section = 'overview'; selectedTrain = null"><Home :size="19" fill="currentColor" />{{ t('overview') }}</button>
+          <button :class="['work-nav', { active: section === 'overview' }]" @click="navigate('overview')"><Home :size="19" fill="currentColor" />{{ t('overview') }}</button>
           <span class="nav-caption">{{ t('contentGroup') }}</span>
-          <button :class="['work-nav', { active: section === 'all' }]" @click="section = 'all'; selectedTrain = null"><Box :size="19" />{{ t('allContent') }}</button>
-          <button :class="['work-nav', { active: section === 'trains' }]" @click="section = 'trains'; selectedTrain = null"><TrainFront :size="19" />{{ t('trains') }}</button>
-          <button :class="['work-nav', { active: section === 'objects' }]" @click="section = 'objects'; selectedTrain = null"><Trees :size="19" />{{ t('decorativeObjects') }}<small>{{ t('planned') }}</small></button>
-          <button :class="['work-nav', { active: section === 'pids' }]" @click="section = 'pids'; selectedTrain = null"><Monitor :size="19" />{{ t('pids') }}<small>{{ t('planned') }}</small></button>
+          <button :class="['work-nav', { active: section === 'all' }]" @click="navigate('all')"><Box :size="19" />{{ t('allContent') }}</button>
+          <button :class="['work-nav', { active: section === 'trains' }]" @click="navigate('trains')"><TrainFront :size="19" />{{ t('trains') }}</button>
+          <button :class="['work-nav', { active: section === 'objects' }]" @click="navigate('objects')"><TreePine :size="19" />{{ t('decorativeObjects') }}<small>{{ t('planned') }}</small></button>
+          <button :class="['work-nav', { active: section === 'pids' }]" @click="navigate('pids')"><Monitor :size="19" />{{ t('pids') }}<small>{{ t('planned') }}</small></button>
           <div class="work-nav-rule"></div><span class="nav-caption">{{ t('projectGroup') }}</span>
-          <button :class="['work-nav', { active: section === 'assets' }]" @click="section = 'assets'; selectedTrain = null"><Database :size="19" />{{ t('assetLibrary') }}</button>
-          <button :class="['work-nav', { active: section === 'settings' }]" @click="section = 'settings'; selectedTrain = null"><Settings2 :size="19" />{{ t('projectSettings') }}</button>
+          <button :class="['work-nav', { active: section === 'assets' }]" @click="navigate('assets')"><Database :size="19" />{{ t('assetLibrary') }}</button>
+          <button :class="['work-nav', { active: section === 'settings' }]" @click="navigate('settings')"><Settings2 :size="19" />{{ t('projectSettings') }}</button>
         </nav>
       </aside>
       <main :class="['workbench-main',{editing:selectedTrain}]">
-        <div v-if="error" class="work-error">{{ error }}<button @click="load">{{ t('retry') }}</button></div>
+        <div v-if="error" class="work-error">{{ error }}<button @click="data ? saveSettings() : load()">{{ t('retry') }}</button></div>
         <div v-if="data?.recovered" class="recovery-banner">{{ t('recoveredProject') }}</div>
         <template v-if="!loading && data">
           <template v-if="section === 'overview'">
             <div class="workspace-heading"><div><h1>{{ t('projectOverview') }}</h1><p>{{ t('overviewSubtitle') }}</p></div><button class="new-train" @click="creating = true"><Plus :size="22" />{{ t('newTrain') }}</button></div>
             <section class="summary-card"><span class="summary-label">{{ t('projectLabel') }}</span><h2>{{ data.name }}</h2><p>{{ data.description || t('projectSummary') }}</p><span class="summary-target">{{ data.namespace }}</span></section>
             <section class="content-types"><h2>{{ t('contentTypes') }}</h2><p>{{ t('contentTypesHint') }}</p><div class="type-cards">
-              <button class="type-card" @click="section = 'trains'"><TrainFront :size="30" /><span><strong>{{ t('trains') }}</strong><small>{{ t('trainTypeHint') }}</small></span><ArrowRight :size="18" /></button>
-              <button class="type-card planned-card" @click="section = 'objects'"><Trees :size="30" /><span><strong>{{ t('decorativeObjects') }}</strong><small>{{ t('objectTypeHint') }}</small></span><em>{{ t('planned') }}</em></button>
-              <button class="type-card planned-card" @click="section = 'pids'"><Monitor :size="30" /><span><strong>{{ t('pids') }}</strong><small>{{ t('pidsTypeHint') }}</small></span><em>{{ t('planned') }}</em></button>
+              <button class="type-card" @click="navigate('trains')"><TrainFront :size="30" /><span><strong>{{ t('trains') }}</strong><small>{{ t('trainTypeHint') }}</small></span><ArrowRight :size="18" /></button>
+              <button class="type-card planned-card" @click="navigate('objects')"><TreePine :size="30" /><span><strong>{{ t('decorativeObjects') }}</strong><small>{{ t('objectTypeHint') }}</small></span><em>{{ t('planned') }}</em></button>
+              <button class="type-card planned-card" @click="navigate('pids')"><Monitor :size="30" /><span><strong>{{ t('pids') }}</strong><small>{{ t('pidsTypeHint') }}</small></span><em>{{ t('planned') }}</em></button>
             </div></section>
-            <section class="recent-content"><div class="recent-heading"><div><h2>{{ t('recentlyEdited') }}</h2><p>{{ t('recentlyEditedHint') }}</p></div><button @click="section = 'all'">{{ t('viewAll') }}<ArrowRight :size="16" /></button></div><div class="content-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in recentItems" :key="item.id" class="content-row" @click="selectedTrain = item; section = 'trains'"><span class="item-name"><span class="item-icon"><TrainFront :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ t('trains') }}</small></span></span><span class="item-kind"><TrainFront :size="16" />{{ t('trains') }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!recentItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ t('noContent') }}</strong><span>{{ t('noContentHint') }}</span></div></div></section>
+            <section class="recent-content"><div class="recent-heading"><div><h2>{{ t('recentlyEdited') }}</h2><p>{{ t('recentlyEditedHint') }}</p></div><button @click="navigate('all')">{{ t('viewAll') }}<ArrowRight :size="16" /></button></div><div class="content-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in recentItems" :key="item.id" class="content-row" @click="openTrain(item)"><span class="item-name"><span class="item-icon"><TrainFront :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ t('trains') }}</small></span></span><span class="item-kind"><TrainFront :size="16" />{{ t('trains') }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!recentItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ t('noContent') }}</strong><span>{{ t('noContentHint') }}</span></div></div></section>
           </template>
           <template v-else>
             <div class="workspace-heading"><div><h1>{{ selectedTrain?.name || sectionTitle }}</h1><p>{{ selectedTrain ? t('trainEditorHint') : section === 'trains' ? t('trainTypeHint') : section === 'all' ? t('contentTypesHint') : section === 'assets' ? t('assetsHint') : section === 'settings' ? t('projectSettingsHint') : t('plannedHint') }}</p></div><button v-if="section === 'trains' || section === 'all'" class="new-train" @click="creating = true"><Plus :size="22" />{{ t('newTrain') }}</button></div>
-            <template v-if="section === 'trains' || section === 'all'"><TrainEditor v-if="selectedTrain" ref="trainEditor" :project-path="project.path" :entry="selectedTrain" @back="selectedTrain=null" @changed="updateEntry" @status="saveStatus=$event" @error="error=$event" /><template v-else><label class="content-search"><Search :size="18" /><input v-model="query" :placeholder="t('contentSearch')" /></label><div class="content-table list-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in visibleItems" :key="item.id" class="content-row" @click="selectedTrain = item; section = 'trains'"><span class="item-name"><span class="item-icon"><TrainFront :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ t('trains') }}</small></span></span><span class="item-kind"><TrainFront :size="16" />{{ t('trains') }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!visibleItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ section === 'trains' ? t('noTrains') : t('noContent') }}</strong><span>{{ section === 'trains' ? t('noTrainsHint') : t('noContentHint') }}</span></div></div></template></template>
-            <form v-else-if="section === 'settings'" class="settings-panel" @submit.prevent="saveSettings"><Settings2 :size="28" /><h2>{{ t('projectSettings') }}</h2><label>{{ t('namespace') }}<input v-model="data.namespace" pattern="[a-z0-9_.-]+" required /><small>{{ t('namespaceHint') }}</small></label><label>{{ t('description') }}<textarea v-model="data.description" rows="4" /></label><button class="new-train" type="submit">{{ t('saveSettings') }}</button></form>
-            <div v-else class="placeholder-panel"><component :is="section === 'objects' ? Trees : section === 'pids' ? Monitor : Folder" :size="42" /><h2>{{ sectionTitle }}</h2><p>{{ section === 'assets' ? t('assetsHint') : t('plannedHint') }}</p></div>
+            <template v-if="section === 'trains' || section === 'all'"><TrainEditor v-if="selectedTrain" ref="trainEditor" :key="selectedTrain.id" :project-path="project.path" :entry="selectedTrain" @back="leaveTrain" @ready="applyPendingIssue" @changed="updateEntry" @status="saveStatus=$event" @error="error=$event" /><template v-else><label class="content-search"><Search :size="18" /><input v-model="query" :placeholder="t('contentSearch')" /></label><div class="content-table list-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in visibleItems" :key="item.id" class="content-row" @click="openTrain(item)"><span class="item-name"><span class="item-icon"><TrainFront :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ t('trains') }}</small></span></span><span class="item-kind"><TrainFront :size="16" />{{ t('trains') }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!visibleItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ section === 'trains' ? t('noTrains') : t('noContent') }}</strong><span>{{ section === 'trains' ? t('noTrainsHint') : t('noContentHint') }}</span></div></div></template></template>
+            <form v-else-if="section === 'settings'" class="settings-panel" @submit.prevent="saveSettings"><Settings2 :size="28" /><h2>{{ t('projectSettings') }}</h2><section class="cover-settings"><div class="cover-preview"><ProjectArtwork :path="project.path" :revision="coverRevision" /></div><div><h3>{{ t('projectCover') }}</h3><p>{{ t('projectCoverHint') }}</p><div class="cover-actions"><button type="button" :disabled="coverBusy" @click="coverInput?.click()"><Upload :size="15" />{{ t('uploadCover') }}</button><button type="button" :disabled="coverBusy" @click="changeCover(null)">{{ t('removeCover') }}</button></div><input ref="coverInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="coverSelected" /></div></section><label>{{ t('namespace') }}<input v-model="settingsNamespace" pattern="[a-z0-9_.-]+" required /><small>{{ t('namespaceHint') }}</small></label><label>{{ t('description') }}<textarea v-model="settingsDescription" rows="4" /></label><button class="new-train" type="submit">{{ t('saveSettings') }}</button></form>
+            <div v-else class="placeholder-panel"><component :is="section === 'objects' ? TreePine : section === 'pids' ? Monitor : Folder" :size="42" /><h2>{{ sectionTitle }}</h2><p>{{ section === 'assets' ? t('assetsHint') : t('plannedHint') }}</p></div>
           </template>
         </template>
       </main>
@@ -144,5 +214,6 @@ function formatDate(timestamp: number) {
 .save-state{font-size:11px;color:#9faab5;white-space:nowrap}.save-state.saving{color:#d8e3ee}.save-state.failed{color:#ff9e9e}.recovery-banner{margin-bottom:16px;border:1px solid #8a7041;border-radius:8px;background:#3b3325;color:#f3d9a4;padding:11px 14px;font-size:12px}
 .workbench-main.editing{overflow:hidden;padding:0}.workbench-main.editing>.workspace-heading{display:none}.workbench-main.editing>.work-error,.workbench-main.editing>.recovery-banner{position:absolute;z-index:8;left:20px;right:20px}.workbench-main.editing .train-editor{height:100%}
 .work-modal select,.settings-panel input,.settings-panel textarea{height:40px;border:1px solid #5c6874;background:#1c2329;color:#fff;border-radius:7px;padding:0 11px;outline:0}.export-modal label{margin-top:16px}.export-issues{max-height:170px;overflow:auto;margin-top:16px;display:flex!important;flex-direction:column;align-items:stretch!important;gap:6px}.export-issues button{display:flex;align-items:flex-start;gap:8px;text-align:left;border:1px solid #7b6262;border-radius:6px;background:#39292b;color:#ffc3c3;padding:8px;font-size:10px}.export-issues button.warning{border-color:#79683f;background:#383226;color:#efd49b}.settings-panel{max-width:620px;border:1px solid #414b54;border-radius:10px;background:#22292f;padding:28px}.settings-panel h2{font:600 22px Outfit,sans-serif}.settings-panel label{display:flex;flex-direction:column;gap:7px;color:#c4cdd6;font-size:12px;margin:18px 0}.settings-panel textarea{height:auto;padding:10px;resize:vertical}.settings-panel small{color:#8995a1}.settings-panel .new-train{margin-top:24px}
+.work-nav>svg{flex-shrink:0}.cover-settings{display:flex;align-items:center;gap:20px;padding:20px 0;border-bottom:1px solid #3d4851}.cover-preview{width:104px;height:104px;border:1px solid #586674;border-radius:12px;flex:none;overflow:hidden}.cover-settings h3{font-size:14px;margin:0 0 7px}.cover-settings p{color:#a7b5c1;font-size:12px;line-height:1.5;margin:0 0 12px}.cover-actions{display:flex;flex-wrap:wrap;gap:8px}.cover-actions button{display:flex;align-items:center;gap:7px;border:1px solid #586775;background:#35424e;color:#e7edf4;border-radius:6px;padding:7px 10px;font-size:11px}.cover-actions button:disabled{opacity:.5}.cover-settings input[hidden]{display:none}.project-image{overflow:hidden}
 </style>
 
