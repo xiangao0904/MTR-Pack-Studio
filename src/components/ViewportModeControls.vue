@@ -125,6 +125,8 @@ onBeforeUnmount(() => {
     <section v-if="open" :id="`${id}-settings`" ref="panel" class="settings-panel" :style="panelPosition" role="dialog" :aria-label="t('viewportSettings')" @focusout="focusOut">
       <header>{{ label(mode) }}<span>{{ t('viewportSettings') }}</span></header>
       <div class="toggle-row"><label><input type="checkbox" :checked="showGrid" @change="emit('update:showGrid', ($event.target as HTMLInputElement).checked)">{{ t('grid') }}</label><label><input type="checkbox" :checked="wireframe" @change="emit('update:wireframe', ($event.target as HTMLInputElement).checked)">{{ t('wireframe') }}</label></div>
+      <label class="ground-toggle"><input type="checkbox" :checked="settings.ambientOcclusion" @change="update('ambientOcclusion', ($event.target as HTMLInputElement).checked)">{{ t('ambientOcclusion') }}</label>
+      <label class="ground-toggle"><input type="checkbox" :checked="settings.pixelTextures" @change="update('pixelTextures', ($event.target as HTMLInputElement).checked)">{{ t('pixelTextures') }}</label>
       <template v-if="mode !== 'studio'">
         <label class="quality-row"><span>{{ t('shadowQuality') }}</span><select :value="settings.shadowQuality" @change="update('shadowQuality', ($event.target as HTMLSelectElement).value as ViewportSettings['shadowQuality'])"><option value="standard">{{ t('qualityStandard') }}</option><option value="high">{{ t('qualityHigh') }}</option></select></label>
         <label class="slider-row"><span>{{ t('lightAzimuth') }}<output>{{ settings.lightAzimuth }}°</output></span><input type="range" min="0" max="360" step="1" :aria-label="t('lightAzimuth')" :value="settings.lightAzimuth" @input="slider($event, 'lightAzimuth')"></label>

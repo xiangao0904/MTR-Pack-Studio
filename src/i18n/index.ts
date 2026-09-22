@@ -1,5 +1,6 @@
 // Keep UI copy separate from components for future locale support.
 const en = {
+  ambientOcclusion: 'Ambient occlusion', pixelTextures: 'Pixelated textures',
   home: 'Home', newProject: 'New Project', openProject: 'Open Project', recentProjects: 'Recent Projects', allProjects: 'All Projects',
   welcome: 'Welcome back', subtitle: 'Continue building your MTR resource packs.', newHint: 'Create a new editable .mtrpack project', openHint: 'Choose an existing .mtrpack project file',
   search: 'Search projects...', name: 'Project name', lastOpened: 'Last opened', location: 'Location', pack: 'MTR resource pack',
