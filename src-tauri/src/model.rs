@@ -56,11 +56,22 @@ pub fn analyze(path: &Path, overrides: &BTreeMap<String, String>) -> Result<Impo
 }
 
 pub fn parse(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
-    match model_format(path)? {
-        ModelFormat::Obj => parse_obj(path, overrides),
-        ModelFormat::Fbx => parse_fbx(path, overrides),
-        ModelFormat::Mqo => parse_mqo(path, overrides),
+    let mut document = match model_format(path)? {
+        ModelFormat::Obj => parse_obj(path, overrides)?,
+        ModelFormat::Fbx => parse_fbx(path, overrides)?,
+        ModelFormat::Mqo => parse_mqo(path, overrides)?,
+    };
+    let mut ids = BTreeSet::new();
+    for (index, part) in document.parts.iter_mut().enumerate() {
+        if !ids.insert(part.id.clone()) { part.id = format!("{}-{index}", part.id); ids.insert(part.id.clone()); }
     }
+    if document.parts.iter().any(|part| part.material.is_none()) {
+        let index = document.materials.len();
+        document.materials.push(ModelMaterial { id: format!("material-{index}"), name: "Default".into(), color: [1.0;4], texture: None });
+        for part in &mut document.parts { if part.material.is_none() { part.material = Some(index); } }
+    }
+    validate_document(&document)?;
+    Ok(document)
 }
 
 pub fn summaries(document: &ModelDocument) -> Vec<ModelPartSummary> {
@@ -123,7 +134,7 @@ fn parse_obj(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
         tobj::load_mtl_buf(&mut BufReader::new(file))
     }).map_err(|e| format!("Unable to parse OBJ: {e}"))?;
     let materials = materials.unwrap_or_default().into_iter().enumerate().map(|(index, material)| {
-        let texture = material.diffuse_texture.map(|name| overrides.get(&name).cloned().unwrap_or(name));
+        let texture = material.diffuse_texture.map(|name| { let key = name.rsplit(['/', '\\']).next().unwrap_or(&name); overrides.get(key).cloned().unwrap_or(name) });
         let diffuse = material.diffuse.unwrap_or([0.8, 0.8, 0.8]);
         ModelMaterial { id: format!("material-{index}"), name: material.name, color: [diffuse[0], diffuse[1], diffuse[2], material.dissolve.unwrap_or(1.0)], texture }
     }).collect();
@@ -151,26 +162,41 @@ fn parse_fbx(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
     if !scene.skin_deformers.is_empty() { warnings.push("Skinning was detected. The imported preview uses the static mesh pose.".into()); }
     if !scene.blend_deformers.is_empty() { warnings.push("Morph targets were detected and skipped.".into()); }
     if scene.anim_stacks.len() > 1 || !scene.anim_curves.is_empty() { warnings.push("Animation timelines were detected and skipped.".into()); }
-    let materials = scene.materials.iter().enumerate().map(|(index, material)| ModelMaterial { id: format!("material-{index}"), name: material.element.name.to_string(), color: [0.8, 0.8, 0.8, 1.0], texture: material.textures.first().and_then(|entry| { let name = if entry.texture.relative_filename.is_empty() { entry.texture.filename.to_string() } else { entry.texture.relative_filename.to_string() }; if name.is_empty() { None } else { let key = Path::new(&name).file_name().and_then(|value| value.to_str()).unwrap_or(&name); Some(overrides.get(key).cloned().unwrap_or(name)) } }) }).collect();
+    let materials = scene.materials.iter().enumerate().map(|(index, material)| {
+        let map = if material.pbr.base_color.has_value || material.pbr.base_color.texture.is_some() { &material.pbr.base_color } else { &material.fbx.diffuse_color };
+        let value = map.value_vec4;
+        let color = if map.has_value { [value.x as f32, value.y as f32, value.z as f32, if material.pbr.opacity.has_value { material.pbr.opacity.value_vec4.x as f32 } else { 1.0 }] } else { [1.0;4] };
+        let texture = map.texture.as_ref().and_then(|texture| {
+            let name = if texture.relative_filename.is_empty() { texture.filename.to_string() } else { texture.relative_filename.to_string() };
+            if name.is_empty() { None } else { let key = name.rsplit(['/', '\\']).next().unwrap_or(&name); Some(overrides.get(key).cloned().unwrap_or(name)) }
+        });
+        ModelMaterial { id: format!("material-{index}"), name: material.element.name.to_string(), color, texture }
+    }).collect();
     let mut parts = Vec::new();
     for (node_index, node) in scene.nodes.iter().enumerate() {
         let Some(mesh) = node.mesh.as_ref() else { continue };
-        let mut positions = Vec::new(); let mut normals = Vec::new(); let mut texcoords = Vec::new(); let mut indices = Vec::new();
+        let name = if node.element.name.is_empty() { format!("Part {}", node_index + 1) } else { node.element.name.to_string() };
+        let mut groups: BTreeMap<Option<usize>, ModelPart> = BTreeMap::new();
         let normal_matrix = node.get_compatible_matrix_for_normals();
-        for face in mesh.faces.iter() {
-            let mut triangle_indices = vec![0u32; mesh.max_face_triangles.max(1) * 3];
-            let triangle_count = mesh.triangulate_face(&mut triangle_indices, *face) as usize;
-            for &corner in triangle_indices[..triangle_count * 3].iter() {
-                let corner = corner as usize; let position = ufbx::transform_position(&node.geometry_to_world, mesh.vertex_position[corner]);
-                positions.push([-(position.x as f32), position.y as f32, position.z as f32]);
-                if mesh.vertex_normal.exists { let normal = ufbx::transform_direction(&normal_matrix, mesh.vertex_normal[corner]); normals.push([-(normal.x as f32), normal.y as f32, normal.z as f32]); }
-                if mesh.vertex_uv.exists { let uv = mesh.vertex_uv[corner]; texcoords.push([uv.x as f32, uv.y as f32]); }
-                indices.push((positions.len() - 1) as u32);
+        let reverse_winding = ufbx::matrix_determinant(&node.geometry_to_world) >= 0.0;
+        for (face_index, face) in mesh.faces.iter().enumerate() {
+            let material = mesh.face_material.get(face_index).and_then(|index| node.materials.get(*index as usize).or_else(|| mesh.materials.get(*index as usize))).map(|material| material.element.typed_id as usize);
+            let part = groups.entry(material).or_insert_with(|| ModelPart { id: format!("part-{node_index}-{}", material.map_or_else(|| "default".into(), |v| v.to_string())), name: name.clone(), positions:Vec::new(), normals:Vec::new(), texcoords:Vec::new(), indices:Vec::new(), material });
+            let mut corners = vec![0u32; mesh.max_face_triangles.max(1) * 3];
+            let triangle_count = mesh.triangulate_face(&mut corners, *face) as usize;
+            for triangle in corners[..triangle_count * 3].chunks_exact(3) {
+                let order = if reverse_winding { [triangle[0],triangle[2],triangle[1]] } else { [triangle[0],triangle[1],triangle[2]] };
+                for corner in order {
+                    let corner = corner as usize;
+                    let position = ufbx::transform_position(&node.geometry_to_world, mesh.vertex_position[corner]);
+                    part.positions.push([-(position.x as f32),position.y as f32,position.z as f32]);
+                    if mesh.vertex_normal.exists { let normal = ufbx::transform_direction(&normal_matrix, mesh.vertex_normal[corner]); let length = (normal.x*normal.x+normal.y*normal.y+normal.z*normal.z).sqrt().max(1e-12); part.normals.push([(-normal.x/length) as f32,(normal.y/length) as f32,(normal.z/length) as f32]); }
+                    if mesh.vertex_uv.exists { let uv=mesh.vertex_uv[corner]; part.texcoords.push([uv.x as f32,uv.y as f32]); }
+                    part.indices.push((part.positions.len()-1) as u32);
+                }
             }
         }
-        for triangle in indices.chunks_exact_mut(3) { triangle.swap(1, 2); }
-        let name = if node.element.name.is_empty() { format!("Part {}", node_index + 1) } else { node.element.name.to_string() };
-        parts.push(ModelPart { id: format!("part-{}", slugify(&name, &node_index.to_string())), name, positions, normals, texcoords, indices, material: mesh.materials.first().map(|material| material.element.typed_id as usize) });
+        parts.extend(groups.into_values().filter(|part| !part.indices.is_empty()));
     }
     if parts.is_empty() { return Err("The FBX file contains no static mesh geometry.".into()); }
     Ok(ModelDocument { parts, materials, warnings })
@@ -193,40 +219,81 @@ fn parse_mqo(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
     while let Some(relative) = text[cursor..].find("Object ") {
         let start = cursor + relative; let Some(open) = text[start..].find('{') else { break }; let body_start = start + open + 1;
         let Some(close) = find_matching_brace(&text, start + open) else { break }; let header = &text[start..start + open]; let body = &text[body_start..close];
-        let name = quoted(header).unwrap_or_else(|| format!("Part {}", parts.len() + 1)); let mut vertices = Vec::new(); let mut indices = Vec::new(); let mut texcoords = Vec::new(); let mut material = None;
+        let name = quoted(header).unwrap_or_else(|| format!("Part {}", parts.len() + 1));
+        let mut vertices = Vec::new();
+        let mut groups: BTreeMap<Option<usize>, ModelPart> = BTreeMap::new();
         if let Some(vertex_at) = body.find("vertex ") { if let Some(v_open) = body[vertex_at..].find('{') { if let Some(v_close) = body[vertex_at + v_open..].find('}') {
-            for line in body[vertex_at + v_open + 1..vertex_at + v_open + v_close].lines() { let nums: Vec<f32> = line.split_whitespace().filter_map(|v| v.parse().ok()).collect(); if nums.len() >= 3 { vertices.push([-nums[0], nums[1], nums[2]]); } }
+            for line in body[vertex_at + v_open + 1..vertex_at + v_open + v_close].lines() { let nums: Vec<f32> = line.split_whitespace().filter_map(|v| v.parse().ok()).collect(); if nums.len() >= 3 { vertices.push([-nums[0]*0.01,nums[1]*0.01,nums[2]*0.01]); } }
         }}}
         if let Some(face_at) = body.find("face ") { if let Some(f_open) = body[face_at..].find('{') { if let Some(f_close) = body[face_at + f_open..].find('}') {
             for line in body[face_at + f_open + 1..face_at + f_open + f_close].lines().map(str::trim) {
-                let vertex_ids: Vec<u32> = tuple_values(line, "V(").unwrap_or_default().into_iter().map(|v| v as u32).collect(); if vertex_ids.len() < 3 { continue; }
-                let uv = tuple_values(line, "UV(").unwrap_or_default(); material = tuple_values(line, "M(").and_then(|v| v.first().copied()).map(|v| v as usize);
-                for triangle in 1..vertex_ids.len() - 1 { indices.extend([vertex_ids[0], vertex_ids[triangle + 1], vertex_ids[triangle]]); }
-                if !uv.is_empty() && texcoords.is_empty() { texcoords.resize(vertices.len(), [0.0, 0.0]); for (i, vertex) in vertex_ids.iter().enumerate() { if i * 2 + 1 < uv.len() { texcoords[*vertex as usize] = [uv[i * 2], uv[i * 2 + 1]]; } } }
+                let ids=tuple_values(line,"V(").unwrap_or_default(); if ids.len()<3 { continue; }
+                if ids.iter().any(|v| !v.is_finite() || *v < 0.0 || v.fract()!=0.0 || *v as usize >= vertices.len()) { return Err(format!("Invalid vertex index in MQO object {name}.")); }
+                let uv=tuple_values(line,"UV(").unwrap_or_default(); if !uv.is_empty() && uv.len()!=ids.len()*2 { return Err(format!("Invalid UV data in MQO object {name}.")); }
+                let material=tuple_values(line,"M(").and_then(|v|v.first().copied()).filter(|v| *v>=0.0).map(|v|v as usize);
+                let part=groups.entry(material).or_insert_with(|| ModelPart { id:format!("part-{}-{}",parts.len(),material.map_or_else(||"default".into(),|v|v.to_string())),name:name.clone(),positions:Vec::new(),normals:Vec::new(),texcoords:Vec::new(),indices:Vec::new(),material });
+                for triangle in 1..ids.len()-1 { for corner in [0,triangle+1,triangle] {
+                    part.positions.push(vertices[ids[corner] as usize]); part.indices.push((part.positions.len()-1) as u32);
+                    part.texcoords.push(if uv.is_empty(){[0.0,0.0]}else{[uv[corner*2],uv[corner*2+1]]});
+                }}
             }
         }}}
-        parts.push(ModelPart { id: format!("part-{}", slugify(&name, &parts.len().to_string())), name, positions: vertices, normals: Vec::new(), texcoords, indices, material }); cursor = close + 1;
+        parts.extend(groups.into_values()); cursor=close+1;
     }
     if parts.is_empty() { return Err("The MQO file contains no model objects.".into()); }
     Ok(ModelDocument { parts, materials, warnings: Vec::new() })
 }
 
-pub fn to_glb(document: &ModelDocument) -> Result<Vec<u8>, String> {
+#[cfg(test)]
+pub fn to_glb(document: &ModelDocument) -> Result<Vec<u8>, String> { to_glb_with_textures(document, &BTreeMap::new()) }
+
+pub fn to_glb_with_textures(document: &ModelDocument, image_bytes: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, String> {
+    validate_document(document)?;
     let mut binary = Vec::new(); let mut views = Vec::new(); let mut accessors = Vec::new(); let mut meshes = Vec::new(); let mut nodes = Vec::new();
     for (index, part) in document.parts.iter().enumerate() {
         let position_view = append_f32_vec3(&mut binary, &part.positions, &mut views); let (min, max) = bounds(&part.positions);
         let position_accessor = accessors.len(); accessors.push(serde_json::json!({"bufferView":position_view,"componentType":5126,"count":part.positions.len(),"type":"VEC3","min":min,"max":max}));
         let normal_accessor = if part.normals.len() == part.positions.len() { let view = append_f32_vec3(&mut binary, &part.normals, &mut views); let value=accessors.len(); accessors.push(serde_json::json!({"bufferView":view,"componentType":5126,"count":part.normals.len(),"type":"VEC3"})); Some(value) } else { None };
-        let uv_accessor = if part.texcoords.len() == part.positions.len() { let view=append_f32_vec2(&mut binary,&part.texcoords,&mut views); let value=accessors.len(); accessors.push(serde_json::json!({"bufferView":view,"componentType":5126,"count":part.texcoords.len(),"type":"VEC2"})); Some(value) } else { None };
+        let uv_accessor = if part.texcoords.len() == part.positions.len() { let preview_uv: Vec<_> = part.texcoords.iter().map(|uv| [uv[0], 1.0 - uv[1]]).collect(); let view=append_f32_vec2(&mut binary,&preview_uv,&mut views); let value=accessors.len(); accessors.push(serde_json::json!({"bufferView":view,"componentType":5126,"count":part.texcoords.len(),"type":"VEC2"})); Some(value) } else { None };
         let index_view = append_u32(&mut binary, &part.indices, &mut views); let index_accessor=accessors.len(); accessors.push(serde_json::json!({"bufferView":index_view,"componentType":5125,"count":part.indices.len(),"type":"SCALAR"}));
         let mut attributes=serde_json::Map::new(); attributes.insert("POSITION".into(), position_accessor.into()); if let Some(v)=normal_accessor { attributes.insert("NORMAL".into(),v.into()); } if let Some(v)=uv_accessor { attributes.insert("TEXCOORD_0".into(),v.into()); }
         let mut primitive=serde_json::Map::new(); primitive.insert("attributes".into(),attributes.into()); primitive.insert("indices".into(),index_accessor.into()); if let Some(material)=part.material.filter(|v| *v<document.materials.len()){primitive.insert("material".into(),material.into());}
         meshes.push(serde_json::json!({"name":part.name,"primitives":[primitive]})); nodes.push(serde_json::json!({"name":part.name,"mesh":index,"extras":{"partId":part.id}}));
     }
-    let materials: Vec<_> = document.materials.iter().map(|material| serde_json::json!({"name":material.name,"pbrMetallicRoughness":{"baseColorFactor":material.color,"metallicFactor":0,"roughnessFactor":0.8},"doubleSided":true})).collect();
-    let json=serde_json::to_vec(&serde_json::json!({"asset":{"version":"2.0","generator":"MTR Pack Studio"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>() }],"nodes":nodes,"meshes":meshes,"materials":materials,"buffers":[{"byteLength":binary.len()}],"bufferViews":views,"accessors":accessors})).map_err(|e|e.to_string())?;
+    let mut images = Vec::new(); let mut textures = Vec::new(); let mut image_ids = BTreeMap::new();
+    let mut materials = Vec::new();
+    for material in &document.materials {
+        let mut definition = serde_json::json!({"name": material.name, "pbrMetallicRoughness":{"baseColorFactor": material.color, "metallicFactor": 0, "roughnessFactor": 0.8}, "doubleSided": true, "extras": {"materialId": material.id}});
+        if let Some(bytes) = image_bytes.get(&material.id) {
+            let hash = blake3::hash(bytes).to_hex().to_string();
+            let texture_index = if let Some(index) = image_ids.get(&hash) { *index } else {
+                align4(&mut binary); let offset = binary.len(); binary.extend(bytes);
+                let view = views.len(); views.push(serde_json::json!({"buffer":0,"byteOffset":offset,"byteLength":bytes.len()}));
+                let index = images.len(); images.push(serde_json::json!({"bufferView":view,"mimeType":"image/png"}));
+                textures.push(serde_json::json!({"source":index,"sampler":0})); image_ids.insert(hash,index); index
+            };
+            definition["pbrMetallicRoughness"]["baseColorTexture"] = serde_json::json!({"index":texture_index});
+            definition["alphaMode"] = "MASK".into(); definition["alphaCutoff"] = 0.1.into();
+        } else if material.color[3] < 1.0 { definition["alphaMode"] = "BLEND".into(); }
+        materials.push(definition);
+    }
+    let mut definition = serde_json::json!({"asset":{"version":"2.0","generator":"MTR Pack Studio"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>() }],"nodes":nodes,"meshes":meshes,"materials":materials,"images":images,"textures":textures,"samplers":[{"magFilter":9728,"minFilter":9728,"wrapS":10497,"wrapT":10497}],"buffers":[{"byteLength":binary.len()}],"bufferViews":views,"accessors":accessors});
+    for key in ["materials", "images", "textures"] { if definition[key].as_array().is_some_and(Vec::is_empty) { definition.as_object_mut().unwrap().remove(key); } }
+    if !definition.as_object().unwrap().contains_key("textures") { definition.as_object_mut().unwrap().remove("samplers"); }
+    let json = serde_json::to_vec(&definition).map_err(|e| e.to_string())?;
     let mut json_chunk=json; while json_chunk.len()%4!=0 { json_chunk.push(b' '); } while binary.len()%4!=0 { binary.push(0); }
     let length=12+8+json_chunk.len()+8+binary.len(); let mut glb=Vec::with_capacity(length); glb.extend(0x46546C67u32.to_le_bytes()); glb.extend(2u32.to_le_bytes()); glb.extend((length as u32).to_le_bytes()); glb.extend((json_chunk.len() as u32).to_le_bytes()); glb.extend(0x4E4F534Au32.to_le_bytes()); glb.extend(json_chunk); glb.extend((binary.len() as u32).to_le_bytes()); glb.extend(0x004E4942u32.to_le_bytes()); glb.extend(binary); Ok(glb)
+}
+
+pub fn validate_document(document: &ModelDocument) -> Result<(), String> {
+    if document.parts.is_empty() { return Err("The model contains no geometry.".into()); }
+    for part in &document.parts {
+        if part.positions.is_empty() || part.indices.is_empty() || part.indices.len() % 3 != 0 || part.indices.iter().any(|index| *index as usize >= part.positions.len()) { return Err(format!("Invalid triangles in part {}.", part.name)); }
+        if part.positions.iter().flatten().chain(part.normals.iter().flatten()).chain(part.texcoords.iter().flatten()).any(|v| !v.is_finite()) { return Err(format!("Non-finite coordinates in part {}.", part.name)); }
+        if !part.texcoords.is_empty() && part.texcoords.len() != part.positions.len() { return Err(format!("Invalid UV coordinates in part {}.", part.name)); }
+        if part.material.is_some_and(|index| index >= document.materials.len()) { return Err(format!("Invalid material in part {}.", part.name)); }
+    }
+    Ok(())
 }
 
 fn align4(data:&mut Vec<u8>){while data.len()%4!=0{data.push(0)}}

@@ -23,6 +23,7 @@ pub struct CarriageDefinition {
     pub id: String,
     pub export_id: String,
     pub name: String,
+    #[serde(default)] pub thumbnail_hash: Option<String>,
     #[serde(default = "default_length")] pub length: f32,
     #[serde(default = "default_width")] pub width: f32,
     #[serde(default = "default_bogie_one")] pub bogie_1_position: f32,
@@ -155,7 +156,7 @@ impl TrainDefinition {
 impl CarriageDefinition {
     pub fn new(name: &str, export_id: &str) -> Self {
         Self {
-            id: Uuid::new_v4().to_string(), export_id: export_id.into(), name: name.into(), length: default_length(), width: default_width(),
+            id: Uuid::new_v4().to_string(), export_id: export_id.into(), name: name.into(), thumbnail_hash: None, length: default_length(), width: default_width(),
             bogie_1_position: default_bogie_one(), bogie_2_position: default_bogie_two(), coupling_padding_1: 0.0, coupling_padding_2: 0.0,
             end_1: EndConfiguration::default(), end_2: EndConfiguration::default(), placement: CarPlacementRule::default(),
             body_models: Vec::new(), bogie_1_models: Vec::new(), bogie_2_models: Vec::new(),

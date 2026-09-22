@@ -57,6 +57,8 @@ pub struct ProjectIndex {
     pub description: String,
     #[serde(default)]
     pub target: String,
+    #[serde(default)]
+    pub cover_hash: Option<String>,
     #[serde(default = "default_namespace")]
     pub namespace: String,
     pub content: Vec<ContentEntry>,
@@ -120,6 +122,7 @@ impl Container {
             name: name.to_string(),
             description: String::new(),
             target: String::new(),
+            cover_hash: None,
             namespace: crate::domain::slugify(name, "mtr_pack"),
             content: Vec::new(),
             assets: BTreeMap::new(),
@@ -639,7 +642,7 @@ fn cleanup_temporary_files(path: &Path) {
 }
 
 #[cfg(windows)]
-fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
+pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -665,7 +668,7 @@ fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
+pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> Result<(), String> {
     fs::rename(source, destination).map_err(|e| e.to_string())
 }
 

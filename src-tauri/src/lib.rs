@@ -4,7 +4,7 @@ mod model;
 mod exporter;
 
 use container::{has_project_magic, is_project_path, Container, ContentEntry};
-use domain::{slugify, AssetDefinition, AssetDependency, ModelLayer, TrainDefinition};
+use domain::{slugify, AssetDefinition, AssetDependency, MaterialBinding, ModelLayer, TrainDefinition};
 use model::ImportAnalysis;
 use exporter::{ExportOptions, ExportReport, ValidationIssue};
 use serde::{Deserialize, Serialize};
@@ -365,36 +365,47 @@ fn analyze_model_import(path: String, dependency_overrides: std::collections::BT
 struct ModelImportResult { train: TrainDefinition, asset: AssetDefinition }
 
 #[tauri::command]
-fn import_model(state: State<AppState>, train_id: String, carriage_id: String, slot: String, path: String, dependency_overrides: std::collections::BTreeMap<String, String>) -> Result<ModelImportResult, String> {
-    let path = Path::new(&path); if !path.is_file() { return Err("Choose an existing model file.".into()); }
-    let document = model::parse(path, &dependency_overrides)?; let preview = model::to_glb(&document)?;
+fn import_model(state: State<AppState>, train_id: String, carriage_id: String, slot: String, path: String, dependency_overrides: std::collections::BTreeMap<String, String>, expected_revision: Option<u64>) -> Result<ModelImportResult, String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?;
-    let session = active.as_mut().ok_or_else(|| "Open a project before importing a model.".to_string())?;
-    let entry_index = train_entry_index(&session.container, &train_id)?; let mut train = read_train_document(&mut session.container, entry_index)?;
-    let carriage = train.carriages.iter_mut().find(|item| item.id == carriage_id).ok_or_else(|| "The selected carriage no longer exists.".to_string())?;
-    let previous = session.container.index.clone();
-    let source = fs::read(path).map_err(|e| e.to_string())?; let source_hash = session.container.put_blob(&source, media_type(path))?;
+    let session = active.as_mut().ok_or("Open a project before importing a model.")?;
+    import_model_into(&mut session.container, &train_id, &carriage_id, &slot, &path, &dependency_overrides, expected_revision)
+}
+
+fn import_model_into(container: &mut Container, train_id: &str, carriage_id: &str, slot: &str, path: &str, dependency_overrides: &std::collections::BTreeMap<String, String>, expected_revision: Option<u64>) -> Result<ModelImportResult, String> {
+    let path = Path::new(path); if !path.is_file() { return Err("Choose an existing model file.".into()); }
+    let document = model::parse(path, &dependency_overrides)?;
+    let entry_index = train_entry_index(container, &train_id)?; let mut train = read_train_document(container, entry_index)?;
+    if expected_revision.is_some_and(|revision| train.revision != revision) { return Err("This train changed during import. Retry the import.".into()); }
+    let previous = container.index.clone();
+    let result = (|| {
+    let source = fs::read(path).map_err(|e| e.to_string())?; let source_hash = container.put_blob(&source, media_type(path))?;
     let mut dependencies = Vec::new();
     for referenced in model::referenced_files(path, &dependency_overrides)? {
         let name = referenced.file_name().and_then(|value| value.to_str()).unwrap_or("dependency").to_string();
         let resolved = if referenced.exists() { referenced } else { dependency_overrides.get(&name).map(PathBuf::from).ok_or_else(|| format!("Locate the missing model dependency: {name}"))? };
-        let bytes = fs::read(&resolved).map_err(|e| format!("Unable to read {name}: {e}"))?; let hash = session.container.put_blob(&bytes, media_type(&resolved))?;
+        let bytes = fs::read(&resolved).map_err(|e| format!("Unable to read {name}: {e}"))?; let hash = container.put_blob(&bytes, media_type(&resolved))?;
         dependencies.push(AssetDependency { name, hash, media_type: media_type(&resolved).into() });
     }
     for (name, bytes) in model::embedded_dependencies(path)? {
         if dependencies.iter().any(|dependency| dependency.name.eq_ignore_ascii_case(&name)) { continue; }
-        let hash = session.container.put_blob(&bytes, media_type(Path::new(&name)))?;
+        let hash = container.put_blob(&bytes, media_type(Path::new(&name)))?;
         dependencies.push(AssetDependency { name: name.clone(), hash, media_type: media_type(Path::new(&name)).into() });
     }
-    let document_hash = session.container.put_blob(&rmp_serde::to_vec_named(&document).map_err(|e| e.to_string())?, "application/vnd.mtrpack.model+msgpack")?;
-    let preview_hash = session.container.put_blob(&preview, "model/gltf-binary")?; let asset_id = Uuid::new_v4().to_string();
-    let asset = AssetDefinition { id: asset_id.clone(), name: path.file_stem().and_then(|value| value.to_str()).unwrap_or("Model").into(), source_format: model::model_format(path)?, source_hash, document_hash, preview_hash, dependencies, parts: model::summaries(&document), warnings: document.warnings.clone() };
-    let asset_hash = session.container.put_blob(&serde_json::to_vec(&asset).map_err(|e| e.to_string())?, "application/vnd.mtrpack.asset+json")?; session.container.index.assets.insert(asset_id.clone(), asset_hash);
+    let document_hash = container.put_blob(&rmp_serde::to_vec_named(&document).map_err(|e| e.to_string())?, "application/vnd.mtrpack.model+msgpack")?;
+    let preview_hash = String::new(); let asset_id = Uuid::new_v4().to_string();
+    let mut asset = AssetDefinition { id: asset_id.clone(), name: path.file_stem().and_then(|value| value.to_str()).unwrap_or("Model").into(), source_format: model::model_format(path)?, source_hash, document_hash, preview_hash, dependencies, parts: model::summaries(&document), warnings: document.warnings.clone() };
+    let preview = asset_preview(container, &asset, &[])?;
+    asset.preview_hash = container.put_blob(&preview, "model/gltf-binary")?;
+    let asset_hash = container.put_blob(&serde_json::to_vec(&asset).map_err(|e| e.to_string())?, "application/vnd.mtrpack.asset+json")?; container.index.assets.insert(asset_id.clone(), asset_hash);
     let layer = ModelLayer { id: Uuid::new_v4().to_string(), name: asset.name.clone(), asset_id, flip_texture_v: false, visible: true, material_bindings: Vec::new(), part_rules: Default::default() };
-    match slot.as_str() { "body" => carriage.body_models.push(layer), "bogie1" => carriage.bogie_1_models.push(layer), "bogie2" => carriage.bogie_2_models.push(layer), _ => { session.container.index = previous; return Err("Choose a valid carriage model slot.".into()); } }
-    train.revision += 1; write_train_document(&mut session.container, entry_index, &train)?;
-    if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
+    let carriage = train.carriages.iter_mut().find(|item| item.id == carriage_id).ok_or_else(|| "The selected carriage no longer exists.".to_string())?;
+    match slot { "body" => carriage.body_models.push(layer), "bogie1" => carriage.bogie_1_models.push(layer), "bogie2" => carriage.bogie_2_models.push(layer), _ => { return Err("Choose a valid carriage model slot.".into()); } }
+    train.revision += 1; write_train_document(container, entry_index, &train)?;
+    if let Err(error) = container.commit() { return Err(error); }
     Ok(ModelImportResult { train, asset })
+    })();
+    if result.is_err() { container.index = previous; }
+    result
 }
 
 #[tauri::command]
@@ -403,10 +414,86 @@ fn get_model_asset(state: State<AppState>, asset_id: String) -> Result<AssetDefi
     read_asset(&mut session.container, &asset_id)
 }
 
+fn asset_preview(container: &mut Container, asset: &AssetDefinition, bindings: &[MaterialBinding]) -> Result<Vec<u8>, String> {
+    let document: model::ModelDocument = rmp_serde::from_slice(&container.read_blob(&asset.document_hash)?).map_err(|e| e.to_string())?;
+    let mut textures = std::collections::BTreeMap::new();
+    for material in &document.materials {
+        let hash = if let Some(hash) = bindings.iter().find(|binding| binding.material_id == material.id).and_then(|binding| binding.texture_asset_id.clone()) { Some(hash) }
+        else if let Some(texture) = &material.texture {
+            let name = texture.rsplit(['/', '\\']).next().unwrap_or(texture);
+            let mut matches = asset.dependencies.iter().filter(|dep| dep.name.eq_ignore_ascii_case(name));
+            let dependency = matches.next().ok_or_else(|| format!("Missing texture: {name}"))?;
+            if matches.any(|other| other.hash != dependency.hash) { return Err(format!("Ambiguous texture filename: {name}")); }
+            Some(dependency.hash.clone())
+        } else { None };
+        if let Some(hash) = hash { textures.insert(material.id.clone(), normalize_png(&container.read_blob(&hash)?)?); }
+    }
+    model::to_glb_with_textures(&document, &textures)
+}
+
 #[tauri::command]
-fn get_model_preview(state: State<AppState>, asset_id: String) -> Result<tauri::ipc::Response, String> {
-    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or_else(|| "No project is open.".to_string())?;
-    let asset = read_asset(&mut session.container, &asset_id)?; Ok(tauri::ipc::Response::new(session.container.read_blob(&asset.preview_hash)?))
+fn get_model_preview(state: State<AppState>, asset_id: String, material_bindings: Option<Vec<MaterialBinding>>) -> Result<tauri::ipc::Response, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
+    let asset = read_asset(&mut session.container, &asset_id)?;
+    Ok(tauri::ipc::Response::new(asset_preview(&mut session.container, &asset, &material_bindings.unwrap_or_default())?))
+}
+#[tauri::command]
+fn get_model_materials(state: State<AppState>, asset_id: String) -> Result<Vec<model::ModelMaterial>, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
+    let asset = read_asset(&mut session.container, &asset_id)?;
+    let document: model::ModelDocument = rmp_serde::from_slice(&session.container.read_blob(&asset.document_hash)?).map_err(|e| e.to_string())?;
+    Ok(document.materials)
+}
+#[tauri::command]
+fn store_image_bytes(state: State<AppState>, bytes: Vec<u8>) -> Result<String, String> {
+    let bytes = normalize_png(&bytes)?;
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
+    let previous = session.container.index.clone();
+    let hash = session.container.put_blob(&bytes, "image/png")?;
+    if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
+    Ok(hash)
+}
+#[tauri::command]
+fn import_texture_file(state: State<AppState>, path: String) -> Result<String, String> {
+    if fs::metadata(&path).map_err(|e|e.to_string())?.len() > 32 * 1024 * 1024 { return Err("Images must be smaller than 32 MiB.".into()); }
+    store_image_bytes(state, fs::read(path).map_err(|e|e.to_string())?)
+}
+#[tauri::command]
+fn get_image_asset(state: State<AppState>, hash: String) -> Result<tauri::ipc::Response, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
+    Ok(tauri::ipc::Response::new(session.container.read_blob(&hash)?))
+}
+
+#[tauri::command]
+fn set_project_cover(state: State<AppState>, bytes: Option<Vec<u8>>) -> Result<(), String> {
+    let bytes = bytes.map(|value| normalize_png(&value)).transpose()?;
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let session = active.as_mut().ok_or("No project is open.")?;
+    let previous = session.container.index.clone();
+    session.container.index.cover_hash = bytes.map(|value| session.container.put_blob(&value, "image/png")).transpose()?;
+    if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_project_cover(state: State<AppState>, path: String) -> Result<tauri::ipc::Response, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let mut other;
+    let container = if let Some(session) = active.as_mut().filter(|session| paths_equal(session.container.path(), Path::new(&path))) {
+        &mut session.container
+    } else { other = Container::open(Path::new(&path))?; &mut other };
+    let bytes = match container.index.cover_hash.clone() { Some(hash) => container.read_blob(&hash)?, None => Vec::new() };
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+fn normalize_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if bytes.len() > 32 * 1024 * 1024 { return Err("Images must be smaller than 32 MiB.".into()); }
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default(); limits.max_image_width = Some(8192); limits.max_image_height = Some(8192); limits.max_alloc = Some(256 * 1024 * 1024); reader.limits(limits);
+    let image = reader.decode().map_err(|e| format!("Unable to decode image: {e}"))?;
+    let mut output = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut output, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok(output.into_inner())
 }
 
 #[tauri::command]
@@ -492,7 +579,13 @@ pub fn run() {
             import_model,
             get_model_asset,
             get_model_preview,
+            get_model_materials,
+            store_image_bytes,
+            import_texture_file,
+            get_image_asset,
             update_project_settings,
+            set_project_cover,
+            get_project_cover,
             validate_export,
             export_resource_pack,
             save_project,
