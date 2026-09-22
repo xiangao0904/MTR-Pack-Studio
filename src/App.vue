@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, Minus, MoreHorizontal, Plus, Search, Settings2, Square, X } from '@lucide/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
@@ -23,23 +23,25 @@ const activeProject = ref<ProjectSummary | null>(null)
 const workspace = ref<{ flush: () => Promise<void> }>()
 const filteredProjects = computed(() => projects.value.filter(project => `${project.name} ${project.path}`.toLowerCase().includes(query.value.toLowerCase())))
 
-let forceClose = false
+const desktopListeners: (() => void)[] = []
+let unmounted = false
+let closing = false
+function keepListener(unlisten: () => void) { if (unmounted) unlisten(); else desktopListeners.push(unlisten) }
+onBeforeUnmount(() => { unmounted = true; desktopListeners.forEach(unlisten => unlisten()) })
 onMounted(async () => {
   await refreshProjects()
   if (isDesktop) {
-    await listen('open-project-file', async () => {
+    keepListener(await listen('open-project-file', async () => {
       const path = await takePendingProjectPath()
       if (path) await openExternalProject(path)
-    })
-    await getCurrentWindow().onCloseRequested(async event => {
-      if (forceClose) return
-      event.preventDefault()
+    }))
+    keepListener(await getCurrentWindow().onCloseRequested(async event => {
+      if (closing) { event.preventDefault(); return }
+      closing = true
       try {
         if (activeProject.value) await flushWorkspace()
-        forceClose = true
-        await getCurrentWindow().close()
-      } catch (error) { showError(error) }
-    })
+      } catch (error) { closing = false; event.preventDefault(); showError(error) }
+    }))
     const pending = await takePendingProjectPath()
     if (pending) await openExternalProject(pending)
   }
