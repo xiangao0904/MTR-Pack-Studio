@@ -10,7 +10,8 @@ export type PlacementPreset = 'all' | 'first' | 'last' | 'odd' | 'even' | 'every
 export interface CarPlacementRule { preset: PlacementPreset; every?: number; offset: number; whitelist: string; blacklist: string }
 export interface EndConfiguration { gangway: boolean; barrier: boolean }
 export interface MaterialBinding { materialId: string; textureAssetId?: string }
-export interface ModelLayer { id: string; name: string; assetId: string; flipTextureV: boolean; visible: boolean; materialBindings: MaterialBinding[]; partRules: Record<string, CarPlacementRule> }
+export interface ModelTransform { translation: [number,number,number]; rotation: [number,number,number]; scale: [number,number,number] }
+export interface ModelLayer { id: string; name: string; assetId: string; flipTextureV: boolean; visible: boolean; materialBindings: MaterialBinding[]; partRules: Record<string, CarPlacementRule>; hiddenParts?: string[]; transform?: ModelTransform; partTransforms?: Record<string,ModelTransform> }
 export interface CarriageDefinition { thumbnailHash?: string; id: string; exportId: string; name: string; length: number; width: number; bogie1Position: number; bogie2Position: number; couplingPadding1: number; couplingPadding2: number; end1: EndConfiguration; end2: EndConfiguration; placement: CarPlacementRule; bodyModels: ModelLayer[]; bogie1Models: ModelLayer[]; bogie2Models: ModelLayer[] }
 export interface PreviewCarriage { carriageId: string; reversed: boolean }
 export interface TrainDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; tags: string[]; mtr3BaseTrainType: string; carriages: CarriageDefinition[]; previewConsist: PreviewCarriage[] }
@@ -19,7 +20,7 @@ export interface ModelPartSummary { id: string; name: string; triangleCount: num
 export interface ModelMaterial { id: string; name: string; color: [number, number, number, number]; texture?: string }
 export interface AssetDefinition { materials: ModelMaterial[]; id: string; name: string; sourceFormat: ModelFormat; sourceHash: string; documentHash: string; previewHash: string; dependencies: { name: string; hash: string; mediaType: string }[]; parts: ModelPartSummary[]; warnings: string[] }
 export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
-export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo' }
+export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo'; onlyVisible?: boolean }
 export interface ValidationIssue { severity: 'error' | 'warning'; message: string; trainId?: string; carriageId?: string; layerId?: string | null; field?: string }
 export interface ExportReport { path: string; fileCount: number; warnings: ValidationIssue[] }
 

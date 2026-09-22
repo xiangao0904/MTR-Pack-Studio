@@ -20,7 +20,9 @@ const busy = ref(false)
 const notice = ref('')
 const menuFor = ref<string | null>(null)
 const activeProject = ref<ProjectSummary | null>(null)
-const workspace = ref<{ flush: () => Promise<void> }>()
+const workspace = ref<{ flush: () => Promise<void>; overview: () => Promise<void> }>()
+const editorContext = ref<{name:string;status:'saving'|'saved'|'failed'}>({name:'',status:'saved'})
+const editing = computed(()=>!!activeProject.value && !!editorContext.value.name)
 const filteredProjects = computed(() => projects.value.filter(project => `${project.name} ${project.path}`.toLowerCase().includes(query.value.toLowerCase())))
 
 const desktopListeners: (() => void)[] = []
@@ -110,8 +112,9 @@ function dateLabel(timestamp: number) {
 
 <template>
   <div class="app-shell">
-    <header class="titlebar" @mousedown="dragTitlebar">
+    <header :class="['titlebar',{'editor-titlebar':editing}]" @mousedown="dragTitlebar">
       <div class="brand-mark">M</div><div class="brand-copy"><div class="brand-name">MTR Pack Studio <span class="beta">Beta</span></div><div class="brand-tagline">{{ t('productTagline') }}</div></div>
+      <nav v-if="editing" class="editor-breadcrumbs"><button @click="returnHome">{{ t('home') }}</button><span>/</span><button @click="workspace?.overview()">{{ activeProject?.name }}</button><span>/</span><strong>{{ editorContext.name }}</strong></nav><span v-if="editing" :class="['editor-save',editorContext.status]">{{ editorContext.status==='saving'?t('saving'):editorContext.status==='failed'?t('saveFailed'):t('saved') }}</span>
       <div class="titlebar-actions"><button class="utility-action" @click="notice = t('settingsLater')"><Settings2 :size="19" />{{ t('settings') }}</button><button class="utility-action" @click="notice = t('helpLater')"><HelpCircle :size="19" />{{ t('help') }}</button><span class="titlebar-divider" aria-hidden="true"></span><button class="window-control" :aria-label="t('minimize')" :title="t('minimize')" @click="windowAction('minimize')"><Minus :size="19" /></button><button class="window-control" :aria-label="t('maximize')" :title="t('maximize')" @click="windowAction('toggleMaximize')"><Square :size="16" /></button><button class="window-control close-control" :aria-label="t('close')" :title="t('close')" @click="windowAction('close')"><X :size="20" /></button></div>
     </header>
     <div v-if="!activeProject" class="body-shell">
@@ -134,7 +137,7 @@ function dateLabel(timestamp: number) {
         </section><button class="drop-zone" @click="chooseProject"><Folder :size="31" /><span><strong>{{ t('drop') }}</strong><small>{{ t('dropHint') }}</small></span></button>
       </div><footer class="statusbar"><span><Info :size="17" />{{ t('tip') }}</span><span>✦ &nbsp; {{ t('footerCredit') }}</span></footer></main>
     </div>
-    <ProjectWorkspace v-else ref="workspace" :key="activeProject.path" :project="activeProject" @back="returnHome" />
+    <ProjectWorkspace v-else ref="workspace" :key="activeProject.path" :project="activeProject" @back="returnHome" @editor-context="editorContext=$event" />
     <div v-if="creating" class="modal-scrim" @click.self="creating = false"><form class="create-modal" @submit.prevent="submitProject"><div class="modal-head"><div><span class="eyebrow">{{ t('packEyebrow') }}</span><h2>{{ t('create') }}</h2></div><button type="button" class="close-button" @click="creating = false"><X :size="20" /></button></div><label>{{ t('name') }}<input v-model="projectName" autofocus maxlength="80" :placeholder="t('newPlaceholder')" /></label><label>{{ t('projectFile') }}<span class="folder-field"><input v-model="projectFile" :placeholder="t('projectFileHint')" /><button type="button" @click="chooseProjectFile">{{ t('browse') }}</button></span></label><p>{{ t('projectFileHelp') }}</p><div class="modal-actions"><button type="button" class="cancel-button" @click="creating = false">{{ t('cancel') }}</button><button class="create-button" type="submit" :disabled="busy || !projectName.trim()">{{ t('create') }}</button></div></form></div>
     <div v-if="notice" class="toast" role="alert">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
   </div>
