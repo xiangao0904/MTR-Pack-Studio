@@ -4,7 +4,8 @@ import * as THREE from 'three'
 import { PreviewRenderer, filterModelTextures, prepareMaterialTextures } from '../lib/preview-renderer'
 import { PreviewEnvironment } from '../lib/preview-environment'
 import type { PreviewRenderMode, ViewportSettings } from '../lib/viewport-settings'
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+import { PreviewEnvironmentMap } from '../lib/preview-environment-map'
+import { normalizeViewportSettings } from '../lib/viewport-settings'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { getModelPreview, type MaterialBinding } from '../lib/projects'
@@ -32,7 +33,7 @@ let pipeline: PreviewRenderer | undefined
 let scene: THREE.Scene | undefined
 let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined
 let environment: PreviewEnvironment | undefined
-let environmentTarget: THREE.WebGLRenderTarget | undefined
+let environmentMap: PreviewEnvironmentMap | undefined
 let selectedObject: THREE.Object3D | undefined
 let orthoHeight = 20
 let perspectivePose: {position: THREE.Vector3; target: THREE.Vector3; zoom: number} | undefined
@@ -194,12 +195,15 @@ function captureThumbnail(carriageId: string) {
 }
 function updateEnvironment() {
   pipeline?.clearMaterials()
-  environment?.apply(content, props.renderMode, props.settings)
+  const settings = normalizeViewportSettings(props.renderMode, props.settings)
+  if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings))
+  environment?.apply(content, props.renderMode, settings)
+  pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity)
   if(content && renderer)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe)
-  if (renderer) { renderer.shadowMap.enabled = props.renderMode !== 'studio'; renderer.shadowMap.needsUpdate = true }
+  if (renderer) { renderer.shadowMap.enabled = true; renderer.shadowMap.needsUpdate = true }
 }
-function updateWireframe() { pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;content?.traverse(object => { if(object instanceof THREE.Mesh)for(const material of Array.isArray(object.material)?object.material:[object.material])material.wireframe=props.wireframe }) }
+function updateWireframe() { pipeline?.setIndirect(props.wireframe ? 0 : normalizeViewportSettings(props.renderMode, props.settings).indirectIntensity); pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;content?.traverse(object => { if(object instanceof THREE.Mesh)for(const material of Array.isArray(object.material)?object.material:[object.material])material.wireframe=props.wireframe }) }
 function updateSelection() {
   if (!scene) return
   selectedObject = undefined
@@ -238,16 +242,15 @@ onMounted(()=>{
   if(!host.value)return
   scene=new THREE.Scene();scene.background=new THREE.Color(0x191b1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,5,12)
   try { renderer=new THREE.WebGLRenderer({antialias:true}) } catch(cause) { emit('error',String(cause)); return }
-  renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;renderer.shadowMap.autoUpdate=false;host.value.append(renderer.domElement)
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.BasicShadowMap;renderer.shadowMap.autoUpdate=false;host.value.append(renderer.domElement)
   pipeline=new PreviewRenderer(renderer,scene,camera)
   changeCamera()
-  const room = new RoomEnvironment(); const pmrem = new THREE.PMREMGenerator(renderer)
-  environmentTarget = pmrem.fromScene(room, 0.04); room.dispose(); pmrem.dispose()
-  environment = new PreviewEnvironment(scene, environmentTarget.texture); updateEnvironment()
+  environmentMap = new PreviewEnvironmentMap(renderer)
+  environment = new PreviewEnvironment(scene, undefined, pipeline.lighting); updateEnvironment()
   grid=new THREE.GridHelper(100,100,0x42454b,0x26292e);grid.visible=props.showGrid;scene.add(grid)
   renderer.domElement.addEventListener('click',click);renderer.domElement.addEventListener('pointerdown',pointerDown)
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
-  const animate=()=>{frame=requestAnimationFrame(animate);controls?.update();if(camera)environment?.updateCamera(camera);updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};animate();void rebuild()
+  const animate=()=>{frame=requestAnimationFrame(animate);controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};animate();void rebuild()
 })
 watch(()=>JSON.stringify([props.assets,props.guides,props.thumbnailCarriageId]),()=>void rebuild())
 watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],updateSelection)
@@ -256,7 +259,7 @@ watch(()=>props.showGrid,value=>{if(grid)grid.visible=value;if(guides)guides.vis
 watch(()=>props.wireframe,updateWireframe)
 watch(()=>props.settings,()=>{updateEnvironment();updateWireframe()},{deep:true})
 watch(()=>props.renderMode,()=>{updateEnvironment();updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})
-onBeforeUnmount(()=>{disposed=true;generation++;cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentTarget?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.dispose();renderer?.domElement.remove()})
+onBeforeUnmount(()=>{disposed=true;generation++;cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.dispose();renderer?.domElement.remove()})
 defineExpose({fitView:frameContent})
 </script>
 <template><div ref="host" class="model-viewport"><svg class="orientation" viewBox="-45 -45 90 90" aria-hidden="true"><g v-for="axis in orientationAxes" :key="axis.name" :stroke="axis.color" :fill="axis.color"><line x1="0" y1="0" :x2="axis.x" :y2="axis.y" stroke-width="1.6"/><text :x="axis.x * 1.3" :y="axis.y * 1.3 + 4" text-anchor="middle" stroke="none">{{ axis.name }}</text></g></svg><div v-if="!assets.length" class="viewport-empty">{{ t('previewEmpty') }}</div></div></template>

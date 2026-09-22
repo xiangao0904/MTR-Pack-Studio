@@ -1,11 +1,35 @@
 # Preview rendering and materials
 
-The viewport uses a multisampled half-float render target, a beauty pass, GTAO with
-Poisson denoising, and an output pass for tone mapping and sRGB conversion. AO is
-enabled by default in all three modes and disabled for wireframes. Its 0.45 metre
-radius stays local when previewing a long consist. The normal/depth pass preserves
-base-color alpha cutouts and excludes blended surfaces, lines and sprites. Camera
-switches, viewport resizing and thumbnails use the same pipeline.
+All three modes preserve the imported textures and PBR channels. Studio uses fixed,
+neutral world-space lighting; Material adds an optional floor; Minecraft uses a
+procedural sky environment and grass scenery. The PMREM environment's bright region
+tracks the main light direction. Environment and direct-light intensities remain
+independent art controls. This is raster rendering, with no path tracing.
+
+The half-float pipeline renders normal/depth, GTAO, direct plus environment lighting,
+one local screen-space diffuse bounce, then the final material pass, SMAA and output
+conversion. Up to 4x MSAA handles geometric edges; SMAA runs before tone mapping and
+sRGB conversion. AO affects indirect diffuse/specular lighting only, leaving direct
+illumination and emission intact. Its 0.45 metre radius stays local for long consists.
+Alpha cutouts participate in the normal pass; blended surfaces, lines and sprites
+are excluded. Wireframes disable AO and local bounce. Camera switches, resizing and
+thumbnails use the same pipeline.
+
+Directional soft shadows use PCSS: search blockers, estimate penumbra from their
+world-space distance to the receiver and the light's angular diameter, then filter.
+Contact stays sharper and distant shadows soften. **Light angular size** controls
+softness, independently of shadow-map resolution. Studio/Material default to 12
+degrees; Minecraft defaults to an artistic 2 degrees. Increasing shadow quality
+raises the shadow-map resolution from 2048 to 4096.
+
+**Local indirect light** controls an approximate single diffuse bounce from visible
+surfaces within 2.5 metres. Eight cosine-weighted screen-space rays use twelve depth
+steps each at half resolution, followed by depth/normal-aware filtering and
+upsampling. It uses the current frame only: there is no accumulating feedback or
+history ghosting. Screen-space misses, hidden surfaces and off-screen emitters rely
+on the environment lighting. Small/thin geometry can still lose bounce detail;
+specular radiance is clamped to limit fireflies. This is not full global illumination.
+Set local indirect light to zero to skip its extra scene pass and screen-space work.
 
 Model textures default to linear magnification, trilinear mipmapping and up to 8x
 anisotropy, limited by the GPU. The **Pixelated textures** option restores nearest
@@ -42,9 +66,7 @@ function. A missing scalar map contributes 1 so the scalar factor remains effect
 - MQO: base color/texture and opacity, with `power` converted to approximate
   roughness and `emi` converted to emission color.
 
-The **Materials** panel edits these overrides. View the results in **Material
-Preview** or **Minecraft environment**; Studio deliberately uses neutral gray
-shading. Reset material removes the layer's overrides and restores its imported
+The **Materials** panel edits these overrides. View the results in **Studio**, **Material Preview** or **Minecraft environment**. Reset material removes the layer's overrides and restores its imported
 properties and images.
 
 Existing assets remain readable. Properties discarded by an older import cannot
@@ -56,3 +78,10 @@ overrides applied to exported colors/textures. They do not emit shader-pack PBR 
 Regression coverage includes legacy defaults, property validation, channel packing,
 image embedding, material independence, project reopen, cutout AO, texture filtering
 and color/data texture separation.
+
+For a GPU regression check, run `pnpm dev` and open `/tests/rendering.html`.
+**Run GPU checks** compares soft/hard source sizes, local bounce and AO toggles,
+checks that AO leaves direct-only lighting unchanged within 8-bit rounding,
+and exercises orthographic cameras, thumbnail sizes and Studio texture retention.
+The fixture is isolated from project data. The result must report `passed: true`
+and no shader/WebGL errors. Inspect the soft shadow and checker texture visually.

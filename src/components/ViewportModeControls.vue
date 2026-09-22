@@ -23,7 +23,7 @@ const hint = (mode: PreviewRenderMode) => mode === 'studio' ? t('studioModeHint'
 function update<K extends keyof ViewportSettings>(key: K, value: ViewportSettings[K]) {
   emit('update:settings', { ...props.settings, [key]: value })
 }
-function slider(event: Event, key: 'lightAzimuth' | 'lightElevation' | 'lightIntensity' | 'environmentIntensity') {
+function slider(event: Event, key: 'lightAzimuth' | 'lightElevation' | 'lightIntensity' | 'environmentIntensity' | 'lightSize' | 'indirectIntensity') {
   update(key, Number((event.target as HTMLInputElement).value))
 }
 function reset() {
@@ -127,14 +127,14 @@ onBeforeUnmount(() => {
       <div class="toggle-row"><label><input type="checkbox" :checked="showGrid" @change="emit('update:showGrid', ($event.target as HTMLInputElement).checked)">{{ t('grid') }}</label><label><input type="checkbox" :checked="wireframe" @change="emit('update:wireframe', ($event.target as HTMLInputElement).checked)">{{ t('wireframe') }}</label></div>
       <label class="ground-toggle"><input type="checkbox" :checked="settings.ambientOcclusion" @change="update('ambientOcclusion', ($event.target as HTMLInputElement).checked)">{{ t('ambientOcclusion') }}</label>
       <label class="ground-toggle"><input type="checkbox" :checked="settings.pixelTextures" @change="update('pixelTextures', ($event.target as HTMLInputElement).checked)">{{ t('pixelTextures') }}</label>
-      <template v-if="mode !== 'studio'">
         <label class="quality-row"><span>{{ t('shadowQuality') }}</span><select :value="settings.shadowQuality" @change="update('shadowQuality', ($event.target as HTMLSelectElement).value as ViewportSettings['shadowQuality'])"><option value="standard">{{ t('qualityStandard') }}</option><option value="high">{{ t('qualityHigh') }}</option></select></label>
         <label class="slider-row"><span>{{ t('lightAzimuth') }}<output>{{ settings.lightAzimuth }}°</output></span><input type="range" min="0" max="360" step="1" :aria-label="t('lightAzimuth')" :value="settings.lightAzimuth" @input="slider($event, 'lightAzimuth')"></label>
         <label class="slider-row"><span>{{ t('lightElevation') }}<output>{{ settings.lightElevation }}°</output></span><input type="range" min="10" max="85" step="1" :aria-label="t('lightElevation')" :value="settings.lightElevation" @input="slider($event, 'lightElevation')"></label>
         <label class="slider-row"><span>{{ t('lightIntensity') }}<output>{{ settings.lightIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="8" step="0.1" :aria-label="t('lightIntensity')" :value="settings.lightIntensity" @input="slider($event, 'lightIntensity')"></label>
         <label class="slider-row"><span>{{ t('environmentIntensity') }}<output>{{ settings.environmentIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="3" step="0.1" :aria-label="t('environmentIntensity')" :value="settings.environmentIntensity" @input="slider($event, 'environmentIntensity')"></label>
+        <label class="slider-row"><span>{{ t('lightSize') }}<output>{{ settings.lightSize.toFixed(1) }}°</output></span><input type="range" min="0.1" max="30" step="0.1" :aria-label="t('lightSize')" :value="settings.lightSize" @input="slider($event, 'lightSize')"></label>
+        <label class="slider-row"><span>{{ t('indirectIntensity') }}<output>{{ settings.indirectIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="2" step="0.1" :aria-label="t('indirectIntensity')" :value="settings.indirectIntensity" @input="slider($event, 'indirectIntensity')"></label>
         <label v-if="mode === 'material'" class="ground-toggle"><input type="checkbox" :checked="settings.ground" @change="update('ground', ($event.target as HTMLInputElement).checked)">{{ t('ground') }}</label>
-      </template>
       <button type="button" class="reset-button" @click="reset">{{ t('resetViewportSettings') }}</button>
     </section>
     </Teleport>

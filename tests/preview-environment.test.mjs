@@ -16,18 +16,15 @@ function fixture() {
 test('three preview modes clone PBR channels and preserve source textures, cutouts and shadow flags',()=>{
   const f=fixture();let sourceDisposed=0;f.map.addEventListener('dispose',()=>sourceDisposed++)
   f.environment.apply(f.root,'studio')
-  const gray=f.mesh.material[0]
-  assert.notEqual(gray,f.source);assert.equal(gray.color.getHex(),0xb9bec5)
-  assert.equal(gray.map,f.map);assert.equal(gray.normalMap,f.normalMap)
-  assert.equal(gray.alphaTest,.15);assert.equal(gray.transparent,true);assert.equal(gray.opacity,.4)
-  const shader={fragmentShader:'#include <map_fragment>'};gray.onBeforeCompile(shader)
-  assert.match(shader.fragmentShader,/diffuseColor.a \*= sampledDiffuseColor.a;/)
-  assert.doesNotMatch(shader.fragmentShader,/diffuseColor \*= sampledDiffuseColor;/)
+  const studio=f.mesh.material[0]
+  assert.notEqual(studio,f.source);assert.equal(studio.color.getHex(),f.source.color.getHex());assert.equal(studio.metalness,.8);assert.equal(studio.roughness,.27);assert.equal(studio.clearcoat,.7);assert.equal(studio.transmission,.25)
+  assert.equal(studio.map,f.map);assert.equal(studio.normalMap,f.normalMap)
+  assert.equal(studio.alphaTest,.15);assert.equal(studio.transparent,true);assert.equal(studio.opacity,.4)
   assert.equal(f.source.color.getHex(),0x4599bb);assert.equal(f.source.clearcoat,.7)
-  let grayDisposed=0;gray.addEventListener('dispose',()=>grayDisposed++)
+  let studioDisposed=0;studio.addEventListener('dispose',()=>studioDisposed++)
   f.environment.apply(f.root,'material')
   const pbr=f.mesh.material[0]
-  assert.equal(grayDisposed,1);assert.ok(pbr instanceof THREE.MeshPhysicalMaterial)
+  assert.equal(studioDisposed,1);assert.ok(pbr instanceof THREE.MeshPhysicalMaterial)
   assert.equal(pbr.map,f.map);assert.equal(pbr.normalMap,f.normalMap)
   assert.equal(pbr.clearcoat,.7);assert.equal(pbr.transmission,.25);assert.equal(pbr.roughness,.27);assert.equal(pbr.metalness,.8)
   assert.equal(f.scene.environment,f.environmentMap);assert.equal(f.mesh.castShadow,true);assert.equal(f.mesh.receiveShadow,true)
@@ -69,11 +66,11 @@ test('sun and light agree and shadow frustum includes model plus low-angle groun
   f.dispose()
 })
 
-test('studio lights follow camera without changing source models',()=>{
+test('studio keeps a world-space light and environment with textured materials',()=>{
   const f=fixture();f.environment.apply(f.root,'studio')
   let light;f.scene.traverse(object=>{if(object instanceof THREE.DirectionalLight&&!light)light=object})
   const before=light.position.clone(),camera=new THREE.PerspectiveCamera();camera.rotation.y=Math.PI/2
-  f.environment.updateCamera(camera);assert.ok(light.position.distanceTo(before)>1)
+  camera.updateMatrixWorld();assert.ok(light.position.equals(before));assert.equal(light.castShadow,true);assert.equal(f.scene.environment,f.environmentMap)
   assert.equal(f.mesh.position.y,2);assert.equal(f.mesh.scale.x,1);f.dispose()
 })
 
