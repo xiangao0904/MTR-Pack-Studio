@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Box, BoxSelect, ChevronRight, Copy, Eye, EyeOff, FileBox, Grid3X3, Maximize, Plus, RotateCw, Search, Trash2, Upload, Undo2, Redo2 } from '@lucide/vue'
 import ModelViewport, { type PreviewLayer } from './ModelViewport.vue'
 import ModelHierarchy from './ModelHierarchy.vue'
+import ViewportModeControls from './ViewportModeControls.vue'
+import { loadViewportPreferences, type PreviewRenderMode } from '../lib/viewport-settings'
 import { EditorHistory, trainHistorySnapshot } from '../lib/editor-history'
 import { t } from '../i18n'
 import { analyzeModelImport, chooseModelDependency, chooseModelFile, chooseTextureFile, importTextureFile, storeImageBytes, getImageAsset, getModelAsset, getTrain, importModel, updateTrain, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition, type ValidationIssue } from '../lib/projects'
@@ -17,10 +19,11 @@ const selectedCarriageId = ref('')
 const selectedLayerId = ref('')
 const selectedPartId = ref('')
 const selectedInstanceKey = ref('')
-type RenderMode = 'studio' | 'unlit' | 'minecraft'
 const storedRenderMode = localStorage.getItem('mtr-pack-studio:render-mode')
-const renderMode = ref<RenderMode>(storedRenderMode === 'unlit' || storedRenderMode === 'minecraft' ? storedRenderMode : 'studio')
+const renderMode = ref<PreviewRenderMode>(storedRenderMode === 'unlit' ? 'material' : storedRenderMode === 'material' || storedRenderMode === 'minecraft' ? storedRenderMode : 'studio')
 watch(renderMode, value => localStorage.setItem('mtr-pack-studio:render-mode', value))
+const viewportSettings = ref(loadViewportPreferences())
+watch(viewportSettings, value => localStorage.setItem('mtr-pack-studio:viewport-settings', JSON.stringify(value)), {deep:true})
 const cameraView = ref<'perspective'|'front'|'back'|'left'|'right'|'top'>('perspective')
 const showConsist = ref(false)
 const history = new EditorHistory<TrainDefinition>({ normalize: trainHistorySnapshot })
@@ -34,8 +37,13 @@ const loading = ref(true)
 const carriageQuery = ref('')
 const partQuery = ref('')
 const treeTab = ref<'model' | 'materials'>('model')
-const showGrid = ref(true)
-const wireframe = ref(false)
+function loadViewFlags() {
+  try { const saved = JSON.parse(localStorage.getItem('mtr-pack-studio:view-flags') || '{}'); return Object.fromEntries((['studio','material','minecraft'] as const).map(mode=>[mode,{grid:typeof saved?.[mode]?.grid==='boolean'?saved[mode].grid:mode==='studio',wireframe:saved?.[mode]?.wireframe===true}])) as Record<PreviewRenderMode,{grid:boolean;wireframe:boolean}> } catch { return {studio:{grid:true,wireframe:false},material:{grid:false,wireframe:false},minecraft:{grid:false,wireframe:false}} }
+}
+const viewFlags = ref(loadViewFlags())
+watch(viewFlags, value=>localStorage.setItem('mtr-pack-studio:view-flags',JSON.stringify(value)),{deep:true})
+const showGrid = computed({get:()=>viewFlags.value[renderMode.value].grid,set:value=>{viewFlags.value[renderMode.value].grid=value}})
+const wireframe = computed({get:()=>viewFlags.value[renderMode.value].wireframe,set:value=>{viewFlags.value[renderMode.value].wireframe=value}})
 const viewMode = ref<'single'|'consist'>('single')
 const simulateRules = ref(false)
 const selectedInstance = ref(0)
@@ -191,8 +199,9 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
   <fieldset v-if="train" ref="editorRoot" class="train-editor" :disabled="importing || loading">
     <header class="editor-toolbar">
       <div class="tool-group history-tools"><button :disabled="!canUndo" :title="`${t('undo')} (Ctrl+Z)`" @click="travelHistory('undo')"><Undo2 :size="17" /><span>{{ t('undo') }}</span></button><button :disabled="!canRedo" :title="`${t('redo')} (Ctrl+Shift+Z)`" @click="travelHistory('redo')"><Redo2 :size="17" /><span>{{ t('redo') }}</span></button></div>
-      <label class="camera-picker render-picker"><select v-model="renderMode" :aria-label="t('renderMode')" :title="renderMode==='minecraft' ? t('minecraftPreviewHint') : t('renderMode')"><option value="studio">{{ t('renderStudio') }}</option><option value="unlit">{{ t('renderUnlit') }}</option><option value="minecraft">{{ t('renderMinecraft') }}</option></select></label>
+
       <div class="tool-group view-tools"><label class="camera-picker"><Box :size="17" /><select v-model="cameraView" :aria-label="t('perspective')"><option v-for="view in (['perspective','front','back','left','right','top'] as const)" :key="view" :value="view">{{ t(view==='back'?'viewBack':view) }}</option></select></label><button :class="{active:showGrid}" @click="showGrid=!showGrid"><Grid3X3 :size="17" /><span>{{ t('grid') }}</span></button><button :class="{active:wireframe}" @click="wireframe=!wireframe"><BoxSelect :size="17" /><span>{{ t('wireframe') }}</span></button><button @click="viewport?.fitView()"><Maximize :size="17" /><span>{{ t('fitView') }}</span></button></div>
+      <ViewportModeControls v-model:mode="renderMode" v-model:settings="viewportSettings[renderMode]" v-model:show-grid="showGrid" v-model:wireframe="wireframe" />
       <div class="tool-spacer" /><button class="editor-export" @click="emit('export')"><Upload :size="18" />{{ t('exportPack') }}</button>
     </header>
     <div class="editor-body">
@@ -209,7 +218,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
       </aside>
 
       <main :class="['editor-center',{'with-consist':showConsist}]">
-        <section class="viewport-panel"><ModelViewport ref="viewport" :assets="viewportAssets" :guides="viewportGuides" :selected-part="selectedPartId" :selected-layer="selectedLayerId" :selected-instance-key="selectedInstanceKey" :render-mode="renderMode" :camera-view="cameraView" :show-grid="showGrid" :wireframe="wireframe" :thumbnail-carriage-id="viewMode==='single' && !simulateRules && !importing ? selectedCarriageId : undefined" @select="selection=>selectPart(selection.partId,selection.layerId,selection.carriageId,selection.instanceKey)" @error="emit('error',$event)" @thumbnail="onThumbnail" /><div v-if="renderMode==='minecraft'" :class="['environment-caption',{'with-warning':selectedAsset?.warnings.length}]" :title="t('minecraftPreviewHint')">{{ t('minecraftScale') }}</div><div class="viewport-badge"><Box :size="14" />{{ carriage?.name }} · {{ carriage?.length }} × {{ carriage?.width }} m</div><div v-if="selectedAsset?.warnings.length" class="model-warning"><AlertTriangle :size="15" />{{ selectedAsset.warnings.join(' ') }}</div></section>
+        <section class="viewport-panel"><ModelViewport ref="viewport" :assets="viewportAssets" :guides="viewportGuides" :selected-part="selectedPartId" :selected-layer="selectedLayerId" :selected-instance-key="selectedInstanceKey" :render-mode="renderMode" :settings="viewportSettings[renderMode]" :camera-view="cameraView" :show-grid="showGrid" :wireframe="wireframe" :thumbnail-carriage-id="viewMode==='single' && !simulateRules && !importing ? selectedCarriageId : undefined" @select="selection=>selectPart(selection.partId,selection.layerId,selection.carriageId,selection.instanceKey)" @error="emit('error',$event)" @thumbnail="onThumbnail" /><div v-if="renderMode==='minecraft'" :class="['environment-caption',{'with-warning':selectedAsset?.warnings.length}]" :title="t('minecraftPreviewHint')">{{ t('minecraftScale') }}</div><div class="viewport-badge"><Box :size="14" />{{ carriage?.name }} · {{ carriage?.length }} × {{ carriage?.width }} m</div><div v-if="selectedAsset?.warnings.length" class="model-warning"><AlertTriangle :size="15" />{{ selectedAsset.warnings.join(' ') }}</div></section>
         <section v-if="showConsist" class="consist-panel"><div class="consist-heading"><select v-model="viewMode" :aria-label="t('previewConsist')"><option value="single">{{ t('singleCarriage') }}</option><option value="consist">{{ t('previewConsist') }}</option></select><button :class="{active:simulateRules}" @click="simulateRules=!simulateRules">{{ t('simulateRules') }}</button><button @click="addInstance"><Plus :size="13" />{{ t('addSelectedCarriage') }}</button><span class="tool-spacer" /><button :disabled="!train.previewConsist[selectedInstance]" :title="t('reverseCarriage')" @click="reverseInstance"><RotateCw :size="14" /></button><button :disabled="selectedInstance===0" :title="t('moveUp')" @click="moveInstance(selectedInstance,selectedInstance-1)"><ArrowLeft :size="14" /></button><button :disabled="selectedInstance>=train.previewConsist.length-1" :title="t('moveDown')" @click="moveInstance(selectedInstance,selectedInstance+1)"><ChevronRight :size="14" /></button><button :disabled="!train.previewConsist.length" :title="t('delete')" @click="removeInstance"><Trash2 :size="14" /></button></div><div class="consist-items"><button v-for="(instance,index) in train.previewConsist" :key="index" draggable="true" :class="{active:selectedInstance===index}" @dragstart="dragIndex=index" @dragover.prevent @drop.prevent="dropInstance(index)" @click="selectedInstance=index;selectedCarriageId=instance.carriageId"><span>{{ index+1 }}</span>{{ train.carriages.find(item=>item.id===instance.carriageId)?.name }}<span>{{ instance.reversed ? '←' : '→' }}</span></button><small v-if="!train.previewConsist.length">{{ t('emptyConsist') }}</small></div></section>
         <section class="hierarchy-panel">
           <div class="hierarchy-tabs"><button :class="{active:showConsist}" @click="showConsist=!showConsist">{{ t('showConsist') }}</button><button :class="{active:treeTab==='model'}" @click="treeTab='model'">{{ t('modelTree') }}</button><button :class="{active:treeTab==='materials'}" @click="treeTab='materials'">{{ t('materials') }}</button></div>

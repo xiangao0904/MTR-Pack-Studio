@@ -11,14 +11,22 @@
 
 ## Render modes
 
-- **Studio** uses the dark editor background and neutral lighting.
-- **Unlit materials** displays material colours and textures without scene lighting.
-- **Minecraft environment** uses a blue sky, block clouds, pixel grass and directional face shading. Every grass block and grid cell is exactly one metre; imported models are not automatically rescaled. This is a Minecraft-style preview, not the Minecraft engine, and cannot reproduce every resource pack or shader.
+Three SVG icon buttons immediately after Fit View select the render mode. Hover for the name and description; arrow keys move between modes. The adjacent settings button opens a popover. Escape and clicking outside close it.
 
-The render mode is an application preference. Environment geometry, sky and lighting are never added to the project model or exported pack.
+- **Studio** uses neutral grey materials and soft camera-relative studio lights for inspecting shape. Texture alpha cutouts remain intact. There is no scenery or exported material change.
+- **Material Preview** uses physical materials, a bundled procedural studio reflection environment, direct light, real-time self-shadowing and an optional neutral receiving floor.
+- **Minecraft** shares the physical lighting pipeline and adds pixel grass, sky, block clouds and a sun aligned with the shadow-casting light. Every grass block and grid cell is one metre. Imported models are never rescaled.
+
+Settings include grid and wireframe, standard/high shadow quality, light direction, elevation and intensity, environment intensity, and the Material Preview floor. Reset affects the current mode. Rendering preferences are stored in application preferences and do not dirty or change the project or exported pack. Old Unlit preferences migrate to Material Preview.
+
+PBR source materials retain their supported roughness, metalness, normal, AO, emissive and transparency properties in preview. The environment renderer accepts standard/physical materials without flattening these channels. This release does not add a complete PBR authoring panel or new exporter mappings.
+
+Minecraft uses the editor's real-time renderer; it does not execute Minecraft shaders. Shadow resolution has a finite budget, so very long consists trade close-up detail for coverage.
 
 ## Verification
 
 Automated tests cover history boundaries, pending edits, grouping, collapsed search, backend transform maths, old document defaults, and visibility-aware exports in MTR 4 OBJ/MQO and MTR 3 NTE. Export tests also verify that default exports remain unchanged when visibility is toggled.
 
 Browser interaction checks cover collapsing and reopening groups, hiding the body mesh in the viewport, undo/redo, retaining visibility after reopening the editor, orthographic views, and the unchecked export option. The browser uses built-in sample geometry; desktop import and in-game rendering remain separate acceptance checks.
+
+Render-mode acceptance checks cover icon and keyboard switching, Studio grey shading, real ground shadows changing with light direction, optional material floor, Escape/outside dismissal, and mode/light/quality preferences restored after reloading. Automated environment tests check PBR channel preservation, source-resource ownership, shadow target disposal, sun/light alignment, one-metre ground tiles and long-consist shadow coverage.

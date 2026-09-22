@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
-import { PreviewEnvironment, type PreviewRenderMode } from '../lib/preview-environment'
+import { PreviewEnvironment } from '../lib/preview-environment'
+import type { PreviewRenderMode, ViewportSettings } from '../lib/viewport-settings'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { getModelPreview, type MaterialBinding } from '../lib/projects'
@@ -10,7 +12,7 @@ import { t } from '../i18n'
 export interface PreviewTransform { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }
 export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
 export interface PreviewGuide { key: string; length: number; width: number; z: number; reversed: boolean }
-const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; thumbnailCarriageId?: string; renderMode?: PreviewRenderMode; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, renderMode: 'studio' })
+const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; thumbnailCarriageId?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, renderMode: 'studio' })
 const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; error: [message: string]; thumbnail: [carriageId: string, bytes: Uint8Array] }>()
 const host = ref<HTMLDivElement>()
 const orientationAxes = ref([{name:'X',color:'#ed777c',x:28,y:0},{name:'Y',color:'#87dca3',x:0,y:-28},{name:'Z',color:'#80b6f1',x:-20,y:18}])
@@ -28,6 +30,7 @@ let renderer: THREE.WebGLRenderer | undefined
 let scene: THREE.Scene | undefined
 let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined
 let environment: PreviewEnvironment | undefined
+let environmentTarget: THREE.WebGLRenderTarget | undefined
 let selectedObject: THREE.Object3D | undefined
 let orthoHeight = 20
 let perspectivePose: {position: THREE.Vector3; target: THREE.Vector3; zoom: number} | undefined
@@ -91,7 +94,7 @@ async function rebuild() {
   environment?.restoreMaterials()
   selectedObject = undefined
   if (content) { scene.remove(content); disposeObject(content) }
-  content = group; scene.add(content); environment?.apply(content, props.renderMode); rebuildGuides(); updateSelection()
+  content = group; scene.add(content); updateEnvironment(); rebuildGuides(); updateSelection()
   const keys = props.assets.map(item => item.key).join('|') + props.guides.map(item => item.key).join('|')
   if (keys !== previousKeys) { frameContent(); previousKeys = keys }
   const signature = JSON.stringify(props.assets)
@@ -180,7 +183,11 @@ function captureThumbnail(carriageId: string) {
   if(grid)grid.visible=!!gridVisible;if(guides)guides.visible=!!guidesVisible;if(selection)selection.visible=!!selectionVisible
   emit('thumbnail', carriageId, Uint8Array.from(atob(data.split(',')[1]!), character => character.charCodeAt(0)))
 }
-function updateWireframe() { content?.traverse(object => { if(object instanceof THREE.Mesh)for(const material of Array.isArray(object.material)?object.material:[object.material])material.wireframe=props.wireframe }) }
+function updateEnvironment() {
+  environment?.apply(content, props.renderMode, props.settings)
+  if (renderer) { renderer.shadowMap.enabled = props.renderMode !== 'studio'; renderer.shadowMap.needsUpdate = true }
+}
+function updateWireframe() { if(renderer)renderer.shadowMap.needsUpdate=true;content?.traverse(object => { if(object instanceof THREE.Mesh)for(const material of Array.isArray(object.material)?object.material:[object.material])material.wireframe=props.wireframe }) }
 function updateSelection() {
   if (!scene) return
   selectedObject = undefined
@@ -219,21 +226,24 @@ onMounted(()=>{
   if(!host.value)return
   scene=new THREE.Scene();scene.background=new THREE.Color(0x151a1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,5,12)
   try { renderer=new THREE.WebGLRenderer({antialias:true}) } catch(cause) { emit('error',String(cause)); return }
-  renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;host.value.append(renderer.domElement)
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.shadowMap.autoUpdate=false;host.value.append(renderer.domElement)
   changeCamera()
-  environment = new PreviewEnvironment(scene); environment.apply(content, props.renderMode)
+  const room = new RoomEnvironment(); const pmrem = new THREE.PMREMGenerator(renderer)
+  environmentTarget = pmrem.fromScene(room, 0.04); room.dispose(); pmrem.dispose()
+  environment = new PreviewEnvironment(scene, environmentTarget.texture); updateEnvironment()
   grid=new THREE.GridHelper(100,100,0x52606c,0x28323a);grid.visible=props.showGrid;scene.add(grid)
   renderer.domElement.addEventListener('click',click);renderer.domElement.addEventListener('pointerdown',pointerDown)
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);updateProjection()});resize.observe(host.value)
-  const animate=()=>{frame=requestAnimationFrame(animate);controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)renderer?.render(scene,camera)};animate();void rebuild()
+  const animate=()=>{frame=requestAnimationFrame(animate);controls?.update();if(camera)environment?.updateCamera(camera);updateOrientation();updateSelectionBounds();if(scene&&camera)renderer?.render(scene,camera)};animate();void rebuild()
 })
 watch(()=>JSON.stringify([props.assets,props.guides,props.thumbnailCarriageId]),()=>void rebuild())
 watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],updateSelection)
 watch(()=>props.cameraView,changeCamera)
 watch(()=>props.showGrid,value=>{if(grid)grid.visible=value;if(guides)guides.visible=value})
 watch(()=>props.wireframe,updateWireframe)
-watch(()=>props.renderMode,()=>{environment?.apply(content,props.renderMode);updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})
-onBeforeUnmount(()=>{disposed=true;generation++;cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();environment?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.dispose();renderer?.domElement.remove()})
+watch(()=>props.settings,()=>{updateEnvironment();updateWireframe()},{deep:true})
+watch(()=>props.renderMode,()=>{updateEnvironment();updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})
+onBeforeUnmount(()=>{disposed=true;generation++;cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();environment?.dispose();environmentTarget?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.dispose();renderer?.domElement.remove()})
 defineExpose({fitView:frameContent})
 </script>
 <template><div ref="host" class="model-viewport"><svg class="orientation" viewBox="-45 -45 90 90" aria-hidden="true"><g v-for="axis in orientationAxes" :key="axis.name" :stroke="axis.color" :fill="axis.color"><line x1="0" y1="0" :x2="axis.x" :y2="axis.y" stroke-width="1.6"/><text :x="axis.x * 1.3" :y="axis.y * 1.3 + 4" text-anchor="middle" stroke="none">{{ axis.name }}</text></g></svg><div v-if="!assets.length" class="viewport-empty">{{ t('previewEmpty') }}</div></div></template>
