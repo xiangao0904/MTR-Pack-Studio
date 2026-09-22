@@ -2,6 +2,8 @@ mod container;
 mod domain;
 mod model;
 mod exporter;
+#[cfg(test)]
+mod workflow_tests;
 
 use container::{has_project_magic, is_project_path, Container, ContentEntry};
 use domain::{slugify, AssetDefinition, AssetDependency, MaterialBinding, ModelLayer, TrainDefinition};
