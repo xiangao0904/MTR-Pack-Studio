@@ -1,0 +1,10 @@
+newmtl Paint
+Kd 1 1 1
+d 1
+map_Kd paint.png
+
+newmtl Glass
+Kd 1 1 1
+d 1
+map_Kd checker.png
+

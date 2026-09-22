@@ -15,7 +15,7 @@ const en = {
   projectFileHint: 'D:\\MTR Packs\\Urban Rail Collection.mtrpack', projectFileHelp: 'Choose where to save the project file.',
   browse: 'Browse',
   minimize: 'Minimize', maximize: 'Maximize or restore', close: 'Close',
-  overview: 'Overview', allContent: 'All Content', decorativeObjects: 'Decorative Objects', pids: 'PIDS', planned: 'Planned',
+  overview: 'Overview', allContent: 'All Content', decorativeObjects: 'Eye candy', pids: 'PIDS', planned: 'Planned',
   assetLibrary: 'Asset Library', projectSettings: 'Project Settings', exportPack: 'Export Pack', exportLater: 'Pack export is coming in a future release.',
   projectOverview: 'Project overview', overviewSubtitle: 'Everything in your editable MTR resource pack project, in one place.',
   projectSummary: 'An editable MTR resource pack project.', contentTypes: 'Content types', contentTypesHint: 'Create and manage different types of content for your resource pack.',
@@ -25,7 +25,7 @@ const en = {
   trainNamePlaceholder: 'My train', noContent: 'No content yet', noContentHint: 'Create your first train to start building this pack.',
   noTrains: 'No trains yet', noTrainsHint: 'Create a train to add it to this project.', contentSearch: 'Search content...',
   plannedHint: 'This content type is planned for a future release.', assetsHint: 'Asset management is coming in a future release.',
-  projectSettingsHint: 'Project settings are coming in a future release.', trainEditorHint: 'The train editor is coming in a future release.',
+  projectSettingsHint: 'Manage your project image, namespace and description.', trainEditorHint: 'The train editor is coming in a future release.',
   trainsHeading: 'Trains', allContentHeading: 'All content',
   contentGroup: 'Content', projectGroup: 'Project', projectLabel: 'PROJECT', itemName: 'NAME', itemType: 'TYPE', itemLastEdited: 'LAST EDITED', retry: 'Retry',
   saving: 'Saving…', saved: 'Saved', saveFailed: 'Save failed', recoveredProject: 'The latest incomplete save was skipped. The project was recovered from its last valid checkpoint.',
@@ -44,6 +44,10 @@ const en = {
   fieldName: 'Name',
   body: 'Body Model', frontBogie: 'Front Bogie', rearBogie: 'Rear Bogie', import: 'Import', addLayer: 'Add layer', noModelAssigned: 'No model assigned', uvFlip: 'UV Flip', materialBindings: 'Material Bindings', mtr3Short: 'MTR 3',
   partPlacementHint: 'This rule overrides the carriage rule for the selected part.', carriagePlacementHint: 'Choose where this carriage is used when exporting to MTR 3 and NTE.',
+  projectCover: 'Project image', projectCoverHint: 'PNG, JPEG or WebP. Stored inside your project file.', uploadCover: 'Upload image', removeCover: 'Use default image', imageTooLarge: 'Images must be smaller than 32 MiB.', imageReadFailed: 'Unable to read this image.', chooseTexture: 'Choose texture', imageFiles: 'Images', desktopImage: 'Image storage requires the desktop app.',
+  previewEmpty: 'Import a model to start the 3D preview.', singleCarriage: 'Single carriage', previewConsist: 'Preview consist', simulateRules: 'Simulate placement', addSelectedCarriage: 'Add selected carriage', reverseCarriage: 'Reverse carriage', emptyConsist: 'Add a carriage to preview the full train.', customTexture: 'Custom texture', solidColor: 'Solid color', replaceTexture: 'Replace texture', resetTexture: 'Reset', replaceModel: 'Replace model', overridePlacement: 'Override carriage rule', inheritsPlacement: 'This part inherits the carriage placement rule.', frontCoupling: 'Front coupling gap (m)', rearCoupling: 'Rear coupling gap (m)', frontGangway: 'Front gangway', rearGangway: 'Rear gangway', frontBarrier: 'Front barrier', rearBarrier: 'Rear barrier', copySuffix: 'Copy',
+  advancedPlacementHint: 'Advanced filters use MTR priorities: exact positions override periodic matches; the whitelist wins ties. Use %1 as the blacklist to show only whitelisted positions.', browserDemoModels: 'Browser preview uses the built-in sample models. Use the desktop app to import your own files.',
+  noCarriage: 'The selected carriage no longer exists.', missingModel: 'The model asset could not be found.',
 } as const
 export type MessageKey = keyof typeof en
 export const t = (key: MessageKey) => en[key]
