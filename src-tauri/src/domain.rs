@@ -86,6 +86,7 @@ impl ModelTransform {
 pub struct MaterialBinding {
     pub material_id: String,
     #[serde(default)] pub texture_asset_id: Option<String>,
+    #[serde(default)] pub properties: crate::material::MaterialProperties,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

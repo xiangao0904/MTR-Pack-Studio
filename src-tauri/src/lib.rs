@@ -1,3 +1,4 @@
+mod material;
 mod container;
 mod domain;
 mod model;
@@ -336,6 +337,7 @@ fn update_train(state: State<AppState>, mut train: TrainDefinition, expected_rev
     for carriage in &train.carriages {
         for layer in carriage.body_models.iter().chain(&carriage.bogie_1_models).chain(&carriage.bogie_2_models) {
             layer.transform.validate()?;
+            for binding in &layer.material_bindings { binding.properties.validate()?; }
             for transform in layer.part_transforms.values() { transform.validate()?; }
         }
     }
@@ -423,18 +425,26 @@ fn get_model_asset(state: State<AppState>, asset_id: String) -> Result<AssetDefi
 }
 
 fn asset_preview(container: &mut Container, asset: &AssetDefinition, bindings: &[MaterialBinding]) -> Result<Vec<u8>, String> {
-    let document: model::ModelDocument = rmp_serde::from_slice(&container.read_blob(&asset.document_hash)?).map_err(|e| e.to_string())?;
+    let mut document: model::ModelDocument = rmp_serde::from_slice(&container.read_blob(&asset.document_hash)?).map_err(|e| e.to_string())?;
     let mut textures = std::collections::BTreeMap::new();
-    for material in &document.materials {
-        let hash = if let Some(hash) = bindings.iter().find(|binding| binding.material_id == material.id).and_then(|binding| binding.texture_asset_id.clone()) { Some(hash) }
-        else if let Some(texture) = &material.texture {
-            let name = texture.rsplit(['/', '\\']).next().unwrap_or(texture);
-            let mut matches = asset.dependencies.iter().filter(|dep| dep.name.eq_ignore_ascii_case(name));
-            let dependency = matches.next().ok_or_else(|| format!("Missing texture: {name}"))?;
-            if matches.any(|other| other.hash != dependency.hash) { return Err(format!("Ambiguous texture filename: {name}")); }
-            Some(dependency.hash.clone())
-        } else { None };
-        if let Some(hash) = hash { textures.insert(material.id.clone(), normalize_png(&container.read_blob(&hash)?)?); }
+    let dependency_hash = |texture: &str| -> Result<String,String> {
+        let name=texture.rsplit(['/', '\\']).next().unwrap_or(texture);
+        let mut matches=asset.dependencies.iter().filter(|dep|dep.name.eq_ignore_ascii_case(name));
+        let dependency=matches.next().ok_or_else(||format!("Missing texture: {name}"))?;
+        if matches.any(|other|other.hash!=dependency.hash) {return Err(format!("Ambiguous texture filename: {name}"));}
+        Ok(dependency.hash.clone())
+    };
+    for binding in bindings {
+        binding.properties.validate()?;
+        if !document.materials.iter().any(|m|m.id==binding.material_id) {return Err(format!("Unknown material binding: {}",binding.material_id));}
+    }
+    for material in &mut document.materials {
+        let binding=bindings.iter().find(|binding|binding.material_id==material.id);
+        let hash=if let Some(hash)=binding.and_then(|b|b.texture_asset_id.clone()){Some(hash)}else{material.texture.as_deref().map(&dependency_hash).transpose()?};
+        if let Some(hash)=hash {textures.insert(material.id.clone(),normalize_png(&container.read_blob(&hash)?)?);}
+        let mut maps=material.properties.maps.iter().filter(|(channel,_)|!binding.is_some_and(|b|b.properties.maps.contains_key(channel))).map(|(channel,name)|Ok((*channel,dependency_hash(name)?))).collect::<Result<std::collections::BTreeMap<_,_>,String>>()?;
+        if let Some(binding)=binding {maps.extend(binding.properties.maps.clone());material.properties.overlay(&binding.properties);}
+        for (channel,hash) in maps {textures.insert(format!("{}:{}",material.id,channel.key()),normalize_png(&container.read_blob(&hash)?)?);}
     }
     model::to_glb_with_textures(&document, &textures)
 }

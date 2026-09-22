@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Box, BoxSelect, ChevronRight, Copy, Eye, EyeOff, FileBox, Grid3X3, Maximize, Plus, RotateCw, Search, Trash2, Upload, Undo2, Redo2 } from '@lucide/vue'
 import ModelViewport, { type PreviewLayer } from './ModelViewport.vue'
+import MaterialEditor from './MaterialEditor.vue'
+import type { MaterialProperties, TextureChannel } from '../lib/projects'
 import ModelHierarchy from './ModelHierarchy.vue'
 import ViewportModeControls from './ViewportModeControls.vue'
 import { loadViewportPreferences, type PreviewRenderMode } from '../lib/viewport-settings'
@@ -176,13 +178,18 @@ async function addModelImpl(slot:'body'|'bogie1'|'bogie2',replace?:ModelLayer){
     selectedLayerId.value=added.id;await loadAssets();await flushEdits();emit('changed',{...props.entry,updatedAt:Date.now()})
   }catch(cause){emit('error',message(cause));emit('status','failed')}finally{importing.value=false;hydrating=false}
 }
-function replaceTexture(materialId:string){operationPromise=replaceTextureImpl(materialId).finally(()=>{operationPromise=undefined});return operationPromise}
-async function replaceTextureImpl(materialId:string){
+function replaceTexture(materialId:string,channel?:TextureChannel){operationPromise=replaceTextureImpl(materialId,channel).finally(()=>{operationPromise=undefined});return operationPromise}
+async function replaceTextureImpl(materialId:string,channel?:TextureChannel){
   if(!selectedLayer.value||importing.value)return
   const layer=selectedLayer.value;importing.value=true
-  try{const path=await chooseTextureFile();if(!path)return;await flushEdits();const hash=await importTextureFile(path);const binding=layer.materialBindings.find(item=>item.materialId===materialId);if(binding)binding.textureAssetId=hash;else layer.materialBindings.push({materialId,textureAssetId:hash});await flushEdits()}
+  try{const path=await chooseTextureFile();if(!path)return;await flushEdits();const hash=await importTextureFile(path);let binding=layer.materialBindings.find(item=>item.materialId===materialId);if(!binding){binding={materialId};layer.materialBindings.push(binding)}
+    if(channel){binding.properties ||= {};binding.properties.maps ||= {};binding.properties.maps[channel]=hash;
+      if(channel==='metalness'||channel==='roughness')binding.properties[channel]=1;
+      if(channel==='emissive')binding.properties.emissive=[1,1,1];
+    }else binding.textureAssetId=hash;await flushEdits()}
   catch(cause){emit('error',message(cause))}finally{importing.value=false}
 }
+function editMaterial(materialId:string,properties:MaterialProperties){perform(()=>{const layer=selectedLayer.value;if(!layer)return;const binding=layer.materialBindings.find(item=>item.materialId===materialId);if(binding)binding.properties=properties;else layer.materialBindings.push({materialId,properties})})}
 function resetTexture(materialId:string){perform(()=>{if(selectedLayer.value)selectedLayer.value.materialBindings=selectedLayer.value.materialBindings.filter(item=>item.materialId!==materialId)})}
 function addInstance(){showConsist.value=true;perform(()=>{if(train.value&&carriage.value){train.value.previewConsist.push({carriageId:carriage.value.id,reversed:false});selectedInstance.value=train.value.previewConsist.length-1;viewMode.value='consist'}})}
 function moveInstance(from:number,to:number){perform(()=>{if(!train.value||to<0||to>=train.value.previewConsist.length||from===to)return;const[item]=train.value.previewConsist.splice(from,1);train.value.previewConsist.splice(to,0,item!);selectedInstance.value=to})}
@@ -224,7 +231,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
           <div class="hierarchy-tabs"><button :class="{active:showConsist}" @click="showConsist=!showConsist">{{ t('showConsist') }}</button><button :class="{active:treeTab==='model'}" @click="treeTab='model'">{{ t('modelTree') }}</button><button :class="{active:treeTab==='materials'}" @click="treeTab='materials'">{{ t('materials') }}</button></div>
           <label class="tree-search"><Search :size="14" /><input v-model="partQuery" :placeholder="t('searchParts')" /></label>
           <ModelHierarchy v-if="treeTab==='model'" :storage-key="`mtr-pack-studio:tree:${projectPath}:${entry.id}:${selectedCarriageId}`" :name="carriage?.name || ''" :layers="layers" :assets="assets" :query="partQuery" :selected-layer="selectedLayerId" :selected-part="selectedPartId" @select="selectTree" @visibility="toggleVisibility" />
-          <div v-else class="materials-list"><div v-if="!selectedAsset" class="tree-empty">{{ t('selectModelLayer') }}</div><template v-else><div v-for="material in selectedAsset.materials" :key="material.id" class="material-row"><span class="material-swatch" :style="{background:`rgba(${material.color.slice(0,3).map(value=>Math.round(value*255)).join(',')},${material.color[3]})`}" /><span><strong>{{ material.name }}</strong><small>{{ selectedLayer?.materialBindings.some(item=>item.materialId===material.id&&item.textureAssetId) ? t('customTexture') : material.texture || t('solidColor') }}</small></span><button @click="replaceTexture(material.id)">{{ t('replaceTexture') }}</button><button v-if="selectedLayer?.materialBindings.some(item=>item.materialId===material.id)" @click="resetTexture(material.id)">{{ t('resetTexture') }}</button></div></template></div>
+          <div v-else class="materials-list"><div v-if="!selectedAsset" class="tree-empty">{{ t('selectModelLayer') }}</div><template v-else><MaterialEditor v-for="material in selectedAsset.materials" :key="material.id" :material="material" :binding="selectedLayer?.materialBindings.find(item=>item.materialId===material.id)" @change="editMaterial(material.id,$event)" @texture="replaceTexture(material.id,$event)" @reset="resetTexture(material.id)" /></template></div>
         </section>
         <footer class="editor-status"><span>{{ layers.length }} {{ t('modelLayers') }}</span><i /> <span>{{ triangleCount.toLocaleString() }} {{ t('triangles') }}</span><i /><span>{{ t('unitsMetres') }}</span><i /><span>+Z {{ t('forward') }}</span><button class="status-back" @click="back"><ArrowLeft :size="13" />{{ t('trains') }}</button><span class="status-right"><Grid3X3 :size="13" />{{ t('gridSize') }}</span></footer>
       </main>

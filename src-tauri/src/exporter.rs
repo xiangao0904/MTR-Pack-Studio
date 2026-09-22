@@ -582,6 +582,7 @@ fn write_mtr4_layers(
                     name: "Material".into(),
                     color: [1.0; 4],
                     texture: None,
+                    properties: Default::default(),
                 }],
                 warnings: Vec::new(),
             };
@@ -647,6 +648,7 @@ fn build_mtr3(
                             name: "Default".into(),
                             color: [1.0; 4],
                             texture: None,
+                            properties: Default::default(),
                         });
                         for part in &mut document.parts {
                             if part.material.is_none() {
@@ -788,6 +790,19 @@ fn apply_layer_edits(
     layer: &ModelLayer,
     only_visible: bool,
 ) -> Result<(), String> {
+    for material in &mut document.materials {
+        if let Some(binding) = layer
+            .material_bindings
+            .iter()
+            .find(|b| b.material_id == material.id)
+        {
+            binding.properties.validate()?;
+            material.properties.overlay(&binding.properties);
+            if let Some(opacity) = binding.properties.opacity {
+                material.color[3] = opacity;
+            }
+        }
+    }
     document
         .parts
         .retain(|part| !only_visible || !layer.hidden_parts.contains(&part.id));
@@ -1462,6 +1477,7 @@ mod tests {
                 name: "Paint".into(),
                 color: [0.5, 1.0, 1.0, 1.0],
                 texture: Some("paint.jpg".into()),
+                properties: Default::default(),
             });
             let mut second = doc.parts[0].clone();
             second.id = "p2".into();
@@ -1472,6 +1488,7 @@ mod tests {
                 name: "Solid".into(),
                 color: [0.2, 0.3, 0.4, 1.0],
                 texture: None,
+                properties: Default::default(),
             });
             let mut jpeg = std::io::Cursor::new(Vec::new());
             image::RgbImage::from_pixel(2, 2, image::Rgb([200, 100, 50]))
@@ -1798,6 +1815,7 @@ mod tests {
             .push(crate::domain::MaterialBinding {
                 material_id: "material".into(),
                 texture_asset_id: Some(hash),
+                properties: Default::default(),
             });
         let replaced = texture_bytes(
             &mut fixture.container,
@@ -1824,6 +1842,7 @@ mod tests {
             .push(crate::domain::MaterialBinding {
                 material_id: "material".into(),
                 texture_asset_id: Some("missing".into()),
+                properties: Default::default(),
             });
         fixture.save();
         let issues = validate(&mut fixture.container, &options("mtr4", "obj")).unwrap();

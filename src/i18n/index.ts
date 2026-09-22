@@ -1,5 +1,7 @@
 // Keep UI copy separate from components for future locale support.
 const en = {
+  metalness:'Metalness', roughness:'Roughness', opacity:'Opacity', emissiveColor:'Emission color', alphaMode:'Transparency', alphaOpaque:'Opaque', alphaMask:'Cutout', alphaBlend:'Transparent', alphaCutoff:'Cutout threshold', doubleSided:'Double sided', normalScale:'Normal strength', resetMaterial:'Reset material', noTexture:'No texture', baseColorMap:'Base color', normalMap:'Normal map', metalnessMap:'Metalness map', roughnessMap:'Roughness map', emissiveMap:'Emission map', occlusionMap:'Occlusion map', materialPreviewHint:'View materials in Material or Minecraft mode. PBR channels are saved in the project; game export support depends on the target. Scalar maps use the red channel.',
+
   ambientOcclusion: 'Ambient occlusion', pixelTextures: 'Pixelated textures',
   home: 'Home', newProject: 'New Project', openProject: 'Open Project', recentProjects: 'Recent Projects', allProjects: 'All Projects',
   welcome: 'Welcome back', subtitle: 'Continue building your MTR resource packs.', newHint: 'Create a new editable .mtrpack project', openHint: 'Choose an existing .mtrpack project file',

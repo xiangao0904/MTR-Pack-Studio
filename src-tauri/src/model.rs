@@ -1,3 +1,4 @@
+use crate::material::{AlphaMode, MaterialProperties, TextureChannel};
 use crate::domain::{slugify, ModelFormat, ModelPartSummary};
 use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, BTreeSet}, fs, io::BufReader, path::{Path, PathBuf}};
@@ -29,6 +30,7 @@ pub struct ModelMaterial {
     pub name: String,
     pub color: [f32; 4],
     pub texture: Option<String>,
+    #[serde(default)] pub properties: crate::material::MaterialProperties,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -67,7 +69,7 @@ pub fn parse(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
     }
     if document.parts.iter().any(|part| part.material.is_none()) {
         let index = document.materials.len();
-        document.materials.push(ModelMaterial { id: format!("material-{index}"), name: "Default".into(), color: [1.0;4], texture: None });
+        document.materials.push(ModelMaterial { id: format!("material-{index}"), name: "Default".into(), color: [1.0;4], texture: None, properties: Default::default() });
         for part in &mut document.parts { if part.material.is_none() { part.material = Some(index); } }
     }
     validate_document(&document)?;
@@ -89,7 +91,7 @@ pub fn referenced_files(path: &Path, overrides: &BTreeMap<String, String>) -> Re
                     let requested = name.trim(); let key = Path::new(requested).file_name().and_then(|value|value.to_str()).unwrap_or(requested); let mtl = overrides.get(key).map(PathBuf::from).unwrap_or_else(||parent.join(requested)); files.insert(mtl.clone());
                     if let Ok(mtl_text) = fs::read_to_string(&mtl) {
                         for mtl_line in mtl_text.lines().map(str::trim) {
-                            if let Some(name) = mtl_line.strip_prefix("map_Kd ") { let requested=name.split_whitespace().last().unwrap_or_default();let key=Path::new(requested).file_name().and_then(|value|value.to_str()).unwrap_or(requested);files.insert(overrides.get(key).map(PathBuf::from).unwrap_or_else(||mtl.parent().unwrap_or(parent).join(requested))); }
+                            if let Some(name) = ["map_Kd ", "norm ", "map_Pm ", "map_Pr ", "map_Ke ", "map_AO "].iter().find_map(|prefix| mtl_line.strip_prefix(prefix)) { let requested=name.split_whitespace().last().unwrap_or_default();let key=Path::new(requested).file_name().and_then(|value|value.to_str()).unwrap_or(requested);files.insert(overrides.get(key).map(PathBuf::from).unwrap_or_else(||mtl.parent().unwrap_or(parent).join(requested))); }
                         }
                     }
                 }
@@ -134,9 +136,20 @@ fn parse_obj(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
         tobj::load_mtl_buf(&mut BufReader::new(file))
     }).map_err(|e| format!("Unable to parse OBJ: {e}"))?;
     let materials = materials.unwrap_or_default().into_iter().enumerate().map(|(index, material)| {
+        let mut properties = MaterialProperties::default();
+        properties.metalness = material.unknown_param.get("Pm").and_then(|v| v.parse::<f32>().ok()).map(|v|v.clamp(0.0,1.0));
+        properties.roughness = material.unknown_param.get("Pr").and_then(|v|v.parse::<f32>().ok()).or_else(||material.shininess.map(|v|(2.0/(v.max(0.0)+2.0)).sqrt())).map(|v|v.clamp(0.0,1.0));
+        properties.emissive = material.unknown_param.get("Ke").and_then(|value| { let values:Vec<f32>=value.split_whitespace().filter_map(|v|v.parse().ok()).collect(); (values.len()==3).then(||[values[0].clamp(0.0,1.0),values[1].clamp(0.0,1.0),values[2].clamp(0.0,1.0)]) });
+        for (channel, name) in [(TextureChannel::Normal, material.unknown_param.get("norm")), (TextureChannel::Metalness, material.unknown_param.get("map_Pm")), (TextureChannel::Roughness, material.unknown_param.get("map_Pr")), (TextureChannel::Emissive, material.unknown_param.get("map_Ke")), (TextureChannel::Occlusion, material.unknown_param.get("map_AO"))] {
+            if let Some(name) = name { let name=name.split_whitespace().last().unwrap_or(name); properties.maps.insert(channel,name.into()); }
+        }
+        if properties.maps.contains_key(&TextureChannel::Metalness) && properties.metalness.is_none() { properties.metalness=Some(1.0); }
+        if properties.maps.contains_key(&TextureChannel::Roughness) && properties.roughness.is_none() { properties.roughness=Some(1.0); }
+        if properties.maps.contains_key(&TextureChannel::Emissive) && properties.emissive.is_none() { properties.emissive=Some([1.0;3]); }
         let texture = material.diffuse_texture.map(|name| { let key = name.rsplit(['/', '\\']).next().unwrap_or(&name); overrides.get(key).cloned().unwrap_or(name) });
         let diffuse = material.diffuse.unwrap_or([0.8, 0.8, 0.8]);
-        ModelMaterial { id: format!("material-{index}"), name: material.name, color: [diffuse[0], diffuse[1], diffuse[2], material.dissolve.unwrap_or(1.0)], texture }
+        for name in properties.maps.values_mut() { let key=name.rsplit(['/', '\\']).next().unwrap_or(name);if let Some(replacement)=overrides.get(key) { *name=replacement.clone(); } }
+        ModelMaterial { id: format!("material-{index}"), name: material.name, color: [diffuse[0], diffuse[1], diffuse[2], material.dissolve.unwrap_or(1.0)], texture, properties }
     }).collect();
     let parts = models.into_iter().enumerate().map(|(part_index, model)| {
         let mesh = model.mesh;
@@ -165,12 +178,27 @@ fn parse_fbx(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
     let materials = scene.materials.iter().enumerate().map(|(index, material)| {
         let map = if material.pbr.base_color.has_value || material.pbr.base_color.texture.is_some() { &material.pbr.base_color } else { &material.fbx.diffuse_color };
         let value = map.value_vec4;
-        let color = if map.has_value { [value.x as f32, value.y as f32, value.z as f32, if material.pbr.opacity.has_value { material.pbr.opacity.value_vec4.x as f32 } else { 1.0 }] } else { [1.0;4] };
+        let mut color = if map.has_value { [value.x as f32, value.y as f32, value.z as f32, if material.pbr.opacity.has_value { material.pbr.opacity.value_vec4.x as f32 } else { 1.0 }] } else { [1.0;4] };
+        color[3]=if material.pbr.opacity.has_value { (material.pbr.opacity.value_vec4.x as f32).clamp(0.0,1.0) } else if material.fbx.transparency_factor.has_value { (1.0-material.fbx.transparency_factor.value_vec4.x as f32).clamp(0.0,1.0) } else {1.0};
         let texture = map.texture.as_ref().and_then(|texture| {
             let name = if texture.relative_filename.is_empty() { texture.filename.to_string() } else { texture.relative_filename.to_string() };
             if name.is_empty() { None } else { let key = name.rsplit(['/', '\\']).next().unwrap_or(&name); Some(overrides.get(key).cloned().unwrap_or(name)) }
         });
-        ModelMaterial { id: format!("material-{index}"), name: material.element.name.to_string(), color, texture }
+        let scalar = |map: &ufbx::MaterialMap| map.has_value.then_some((map.value_vec4.x as f32).clamp(0.0,1.0));
+        let mut properties = MaterialProperties { metalness: scalar(&material.pbr.metalness), roughness: scalar(&material.pbr.roughness), ..Default::default() };
+        if properties.roughness.is_none() { properties.roughness=scalar(&material.pbr.glossiness).map(|v|1.0-v).or_else(||material.fbx.specular_exponent.has_value.then(||(2.0/(material.fbx.specular_exponent.value_vec4.x.max(0.0) as f32+2.0)).sqrt())); }
+        let emission=if material.pbr.emission_color.has_value || material.pbr.emission_color.texture.is_some() { &material.pbr.emission_color } else { &material.fbx.emission_color };
+        let factor=if material.pbr.emission_factor.has_value {material.pbr.emission_factor.value_vec4.x as f32} else if material.fbx.emission_factor.has_value {material.fbx.emission_factor.value_vec4.x as f32} else {1.0};
+        if emission.has_value { let v=emission.value_vec4;properties.emissive=Some([v.x as f32,v.y as f32,v.z as f32].map(|v|(v*factor).clamp(0.0,1.0))); }
+        let normal=if material.pbr.normal_map.texture.is_some() { &material.pbr.normal_map } else { &material.fbx.normal_map };
+        for (channel,map) in [(TextureChannel::Normal,normal),(TextureChannel::Metalness,&material.pbr.metalness),(TextureChannel::Roughness,&material.pbr.roughness),(TextureChannel::Emissive,emission),(TextureChannel::Occlusion,&material.pbr.ambient_occlusion)] {
+            if let Some(texture)=map.texture.as_ref() { let name=if texture.relative_filename.is_empty(){texture.filename.to_string()}else{texture.relative_filename.to_string()};if !name.is_empty(){properties.maps.insert(channel,name);} }
+        }
+        if properties.maps.contains_key(&TextureChannel::Metalness) && properties.metalness.is_none() { properties.metalness=Some(1.0); }
+        if properties.maps.contains_key(&TextureChannel::Roughness) && properties.roughness.is_none() { properties.roughness=Some(1.0); }
+        if properties.maps.contains_key(&TextureChannel::Emissive) && properties.emissive.is_none() { properties.emissive=Some([1.0;3]); }
+        for name in properties.maps.values_mut() { let key=name.rsplit(['/', '\\']).next().unwrap_or(name);if let Some(replacement)=overrides.get(key) { *name=replacement.clone(); } }
+        ModelMaterial { id: format!("material-{index}"), name: material.element.name.to_string(), color, texture, properties }
     }).collect();
     let mut parts = Vec::new();
     for (node_index, node) in scene.nodes.iter().enumerate() {
@@ -211,7 +239,10 @@ fn parse_mqo(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
                 let name = quoted(line).unwrap_or_else(|| format!("Material {index}")); let values = tuple_values(line, "col(").unwrap_or_default();
                 let color = [*values.first().unwrap_or(&0.8), *values.get(1).unwrap_or(&0.8), *values.get(2).unwrap_or(&0.8), *values.get(3).unwrap_or(&1.0)];
                 let texture = quoted_after(line, "tex(").map(|value| { let key = Path::new(&value).file_name().and_then(|item| item.to_str()).unwrap_or(&value); overrides.get(key).cloned().unwrap_or(value) });
-                materials.push(ModelMaterial { id: format!("material-{index}"), name, color, texture });
+                let power=tuple_values(line,"power(").and_then(|v|v.first().copied());
+                let emission=tuple_values(line,"emi(").and_then(|v|v.first().copied());
+                let properties=MaterialProperties { roughness:power.map(|v|(2.0/(v.max(0.0)+2.0)).sqrt()), emissive:emission.map(|v|[color[0],color[1],color[2]].map(|c|(c*v).clamp(0.0,1.0))), ..Default::default() };
+                materials.push(ModelMaterial { id: format!("material-{index}"), name, color, texture, properties });
             }
         }}
     }
@@ -261,23 +292,31 @@ pub fn to_glb_with_textures(document: &ModelDocument, image_bytes: &BTreeMap<Str
         meshes.push(serde_json::json!({"name":part.name,"primitives":[primitive]})); nodes.push(serde_json::json!({"name":part.name,"mesh":index,"extras":{"partId":part.id}}));
     }
     let mut images = Vec::new(); let mut textures = Vec::new(); let mut image_ids = BTreeMap::new();
+    let mut embed = |bytes: &[u8]| {
+        let hash=blake3::hash(bytes).to_hex().to_string();
+        if let Some(index)=image_ids.get(&hash) { return *index; }
+        align4(&mut binary);let offset=binary.len();binary.extend(bytes);
+        let view=views.len();views.push(serde_json::json!({"buffer":0,"byteOffset":offset,"byteLength":bytes.len()}));
+        let index=images.len();images.push(serde_json::json!({"bufferView":view,"mimeType":"image/png"}));textures.push(serde_json::json!({"source":index,"sampler":0}));image_ids.insert(hash,index);index
+    };
     let mut materials = Vec::new();
     for material in &document.materials {
-        let mut definition = serde_json::json!({"name": material.name, "pbrMetallicRoughness":{"baseColorFactor": material.color, "metallicFactor": 0, "roughnessFactor": 0.8}, "doubleSided": true, "extras": {"materialId": material.id}});
-        if let Some(bytes) = image_bytes.get(&material.id) {
-            let hash = blake3::hash(bytes).to_hex().to_string();
-            let texture_index = if let Some(index) = image_ids.get(&hash) { *index } else {
-                align4(&mut binary); let offset = binary.len(); binary.extend(bytes);
-                let view = views.len(); views.push(serde_json::json!({"buffer":0,"byteOffset":offset,"byteLength":bytes.len()}));
-                let index = images.len(); images.push(serde_json::json!({"bufferView":view,"mimeType":"image/png"}));
-                textures.push(serde_json::json!({"source":index,"sampler":0})); image_ids.insert(hash,index); index
-            };
-            definition["pbrMetallicRoughness"]["baseColorTexture"] = serde_json::json!({"index":texture_index});
-            definition["alphaMode"] = "MASK".into(); definition["alphaCutoff"] = 0.1.into();
-        } else if material.color[3] < 1.0 { definition["alphaMode"] = "BLEND".into(); }
+        let p=&material.properties;p.validate()?;
+        let mut color=material.color;if let Some(opacity)=p.opacity {color[3]=opacity;}
+        let mut definition = serde_json::json!({"name": material.name, "pbrMetallicRoughness":{"baseColorFactor":color,"metallicFactor":p.metalness.unwrap_or(0.0),"roughnessFactor":p.roughness.unwrap_or(0.8)},"emissiveFactor":p.emissive.unwrap_or([0.0;3]),"doubleSided":p.double_sided.unwrap_or(true),"extras":{"materialId":material.id}});
+        let base=image_bytes.get(&material.id);
+        if let Some(bytes)=base { definition["pbrMetallicRoughness"]["baseColorTexture"]=serde_json::json!({"index":embed(bytes)}); }
+        let mode=p.alpha_mode.unwrap_or(if color[3]<1.0 {AlphaMode::Blend} else if base.is_some() {AlphaMode::Mask} else {AlphaMode::Opaque});
+        definition["alphaMode"]=serde_json::to_value(mode).map_err(|e|e.to_string())?;
+        if mode==AlphaMode::Mask {definition["alphaCutoff"]=p.alpha_cutoff.unwrap_or(0.1).into();}
+        for (channel,key) in [(TextureChannel::Normal,"normalTexture"),(TextureChannel::Emissive,"emissiveTexture"),(TextureChannel::Occlusion,"occlusionTexture")] {
+            if let Some(bytes)=image_bytes.get(&format!("{}:{}",material.id,channel.key())) {definition[key]=serde_json::json!({"index":embed(bytes)});if channel==TextureChannel::Normal {definition[key]["scale"]=p.normal_scale.unwrap_or(1.0).into();}}
+        }
+        let metal=image_bytes.get(&format!("{}:metalness",material.id));let rough=image_bytes.get(&format!("{}:roughness",material.id));
+        if let Some(bytes)=crate::material::pack_metallic_roughness(metal,rough)? {definition["pbrMetallicRoughness"]["metallicRoughnessTexture"]=serde_json::json!({"index":embed(&bytes)});}
         materials.push(definition);
     }
-    let mut definition = serde_json::json!({"asset":{"version":"2.0","generator":"MTR Pack Studio"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>() }],"nodes":nodes,"meshes":meshes,"materials":materials,"images":images,"textures":textures,"samplers":[{"magFilter":9728,"minFilter":9728,"wrapS":10497,"wrapT":10497}],"buffers":[{"byteLength":binary.len()}],"bufferViews":views,"accessors":accessors});
+    let mut definition = serde_json::json!({"asset":{"version":"2.0","generator":"MTR Pack Studio"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>() }],"nodes":nodes,"meshes":meshes,"materials":materials,"images":images,"textures":textures,"samplers":[{"magFilter":9729,"minFilter":9987,"wrapS":10497,"wrapT":10497}],"buffers":[{"byteLength":binary.len()}],"bufferViews":views,"accessors":accessors});
     for key in ["materials", "images", "textures"] { if definition[key].as_array().is_some_and(Vec::is_empty) { definition.as_object_mut().unwrap().remove(key); } }
     if !definition.as_object().unwrap().contains_key("textures") { definition.as_object_mut().unwrap().remove("samplers"); }
     let json = serde_json::to_vec(&definition).map_err(|e| e.to_string())?;
@@ -286,6 +325,7 @@ pub fn to_glb_with_textures(document: &ModelDocument, image_bytes: &BTreeMap<Str
 }
 
 pub fn validate_document(document: &ModelDocument) -> Result<(), String> {
+    for material in &document.materials { material.properties.validate()?; }
     if document.parts.is_empty() { return Err("The model contains no geometry.".into()); }
     for part in &document.parts {
         if part.positions.is_empty() || part.indices.is_empty() || part.indices.len() % 3 != 0 || part.indices.iter().any(|index| *index as usize >= part.positions.len()) { return Err(format!("Invalid triangles in part {}.", part.name)); }

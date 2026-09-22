@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { t } from '../i18n'
-import { bindPreviewTextures } from './preview-glb'
+import { bindPreviewTextures, packMetallicRoughness } from './preview-glb'
 
 export interface ProjectSummary { name: string; path: string; lastOpened: number }
 export interface ContentEntry { id: string; kind: string; name: string; file: string; updatedAt: number; resources?: string[] }
@@ -9,7 +9,9 @@ export interface ProjectData { name: string; namespace: string; description: str
 export type PlacementPreset = 'all' | 'first' | 'last' | 'odd' | 'even' | 'every' | 'custom'
 export interface CarPlacementRule { preset: PlacementPreset; every?: number; offset: number; whitelist: string; blacklist: string }
 export interface EndConfiguration { gangway: boolean; barrier: boolean }
-export interface MaterialBinding { materialId: string; textureAssetId?: string }
+export type TextureChannel = 'normal' | 'metalness' | 'roughness' | 'emissive' | 'occlusion'
+export interface MaterialProperties { metalness?: number | null; roughness?: number | null; emissive?: [number, number, number] | null; opacity?: number | null; alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND' | null; alphaCutoff?: number | null; normalScale?: number | null; doubleSided?: boolean | null; maps?: Partial<Record<TextureChannel, string>> }
+export interface MaterialBinding { materialId: string; textureAssetId?: string; properties?: MaterialProperties }
 export interface ModelTransform { translation: [number,number,number]; rotation: [number,number,number]; scale: [number,number,number] }
 export interface ModelLayer { id: string; name: string; assetId: string; flipTextureV: boolean; visible: boolean; materialBindings: MaterialBinding[]; partRules: Record<string, CarPlacementRule>; hiddenParts?: string[]; transform?: ModelTransform; partTransforms?: Record<string,ModelTransform> }
 export interface CarriageDefinition { thumbnailHash?: string; id: string; exportId: string; name: string; length: number; width: number; bogie1Position: number; bogie2Position: number; couplingPadding1: number; couplingPadding2: number; end1: EndConfiguration; end2: EndConfiguration; placement: CarPlacementRule; bodyModels: ModelLayer[]; bogie1Models: ModelLayer[]; bogie2Models: ModelLayer[] }
@@ -17,7 +19,7 @@ export interface PreviewCarriage { carriageId: string; reversed: boolean }
 export interface TrainDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; tags: string[]; mtr3BaseTrainType: string; carriages: CarriageDefinition[]; previewConsist: PreviewCarriage[] }
 export type ModelFormat = 'obj' | 'fbx' | 'mqo'
 export interface ModelPartSummary { id: string; name: string; triangleCount: number }
-export interface ModelMaterial { id: string; name: string; color: [number, number, number, number]; texture?: string }
+export interface ModelMaterial { id: string; name: string; color: [number, number, number, number]; texture?: string; properties?: MaterialProperties }
 export interface AssetDefinition { materials: ModelMaterial[]; id: string; name: string; sourceFormat: ModelFormat; sourceHash: string; documentHash: string; previewHash: string; dependencies: { name: string; hash: string; mediaType: string }[]; parts: ModelPartSummary[]; warnings: string[] }
 export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
 export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo'; onlyVisible?: boolean }
@@ -163,8 +165,18 @@ export async function getModelPreview(assetId: string, materialBindings: Materia
   if (!inTauri()) {
     const asset = await getModelAsset(assetId); const name = asset.id === 'fixture-studio-train' ? 'studio-train' : 'studio-bogie'
     const source = await (await fetch(`/fixtures/${name}.glb`)).arrayBuffer()
-    const replacements = await Promise.all(materialBindings.filter(binding => binding.textureAssetId).map(async binding => ({ materialId: binding.materialId, bytes: await getImageAsset(binding.textureAssetId!) })))
-    return bindPreviewTextures(source, replacements)
+    const replacements: {materialId: string; bytes: ArrayBuffer; channel?: string}[] = []
+    for (const binding of materialBindings) {
+      if(binding.textureAssetId)replacements.push({materialId:binding.materialId,bytes:await getImageAsset(binding.textureAssetId)})
+      const maps=binding.properties?.maps || {}
+      for(const channel of ['normal','emissive','occlusion'] as const)if(maps[channel])replacements.push({materialId:binding.materialId,channel,bytes:await getImageAsset(maps[channel]!)})
+      if(maps.metalness || maps.roughness) {
+        const packed=await packMetallicRoughness(maps.metalness ? await getImageAsset(maps.metalness) : undefined,maps.roughness ? await getImageAsset(maps.roughness) : undefined)
+        replacements.push({materialId:binding.materialId,channel:'metallicRoughness',bytes:packed})
+      }
+    }
+    return bindPreviewTextures(source, replacements, materialBindings)
+
   }
   return invoke<ArrayBuffer>('get_model_preview', { assetId, materialBindings })
 }

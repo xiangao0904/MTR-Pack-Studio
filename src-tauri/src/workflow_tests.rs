@@ -7,6 +7,44 @@ fn glb_json(bytes: &[u8]) -> serde_json::Value {
 }
 
 #[test]
+fn pbr_import_bindings_and_images_survive_reopen_and_glb_conversion() {
+    use crate::material::{AlphaMode, MaterialProperties, TextureChannel};
+    let root=std::env::temp_dir().join(format!("mtr-pbr-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
+    let png=|pixel| {let mut out=std::io::Cursor::new(Vec::new());image::RgbaImage::from_pixel(2,2,image::Rgba(pixel)).write_to(&mut out,image::ImageFormat::Png).unwrap();out.into_inner()};
+    for (name,pixel) in [("base",[255,255,255,128]),("normal",[128,128,255,255]),("metal",[64,0,0,255]),("rough",[192,0,0,255]),("emission",[255,64,0,255]),("ao",[128,128,128,255])] {fs::write(root.join(format!("{name}.png")),png(pixel)).unwrap();}
+    fs::write(root.join("body.mtl"),"newmtl paint\nKd 1 1 1\nd 0.6\nPm 0.8\nPr 0.3\nKe 0.2 0.1 0\nmap_Kd base.png\nnorm normal.png\nmap_Pm metal.png\nmap_Pr rough.png\nmap_Ke emission.png\nmap_AO ao.png\n").unwrap();
+    let source=root.join("body.obj");fs::write(&source,"mtllib body.mtl\no shell\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl paint\nf 1/1 2/2 3/3\n").unwrap();
+    let path=root.join("pbr.mtrpack");let mut container=Container::create(&path,"PBR").unwrap();let train=TrainDefinition::new("Train","train");
+    container.index.content.push(ContentEntry{id:train.id.clone(),kind:"train".into(),name:train.name.clone(),file:"train.json".into(),updated_at:0,resources:vec![]});write_train_document(&mut container,0,&train).unwrap();container.commit().unwrap();
+    let imported=import_model_into(&mut container,&train.id,&train.carriages[0].id,"body",source.to_str().unwrap(),&BTreeMap::new(),Some(train.revision)).unwrap();
+    let original=asset_preview(&mut container,&imported.asset,&[]).unwrap();let json=glb_json(&original);let material=&json["materials"][0];
+    assert_eq!(material["alphaMode"],"BLEND");assert!((material["pbrMetallicRoughness"]["roughnessFactor"].as_f64().unwrap()-0.3).abs()<1e-6);
+    for key in ["normalTexture","emissiveTexture","occlusionTexture"] {assert!(material[key]["index"].is_number());}
+    let texture=material["pbrMetallicRoughness"]["metallicRoughnessTexture"]["index"].as_u64().unwrap() as usize;
+    let image=json["textures"][texture]["source"].as_u64().unwrap() as usize;let view=json["images"][image]["bufferView"].as_u64().unwrap() as usize;
+    let offset=json["bufferViews"][view]["byteOffset"].as_u64().unwrap() as usize;let length=json["bufferViews"][view]["byteLength"].as_u64().unwrap() as usize;
+    let binary=28+u32::from_le_bytes(original[12..16].try_into().unwrap()) as usize;
+    let packed=image::load_from_memory(&original[binary+offset..binary+offset+length]).unwrap().to_rgba8();assert_eq!(packed.get_pixel(0,0).0,[255,192,64,255]);
+    assert_eq!(json["samplers"][0]["minFilter"],9987);
+    let replacement=container.put_blob(&png([0,128,255,255]),"image/png").unwrap();
+    let binding=MaterialBinding{material_id:"material-0".into(),texture_asset_id:None,properties:MaterialProperties{metalness:Some(1.0),roughness:Some(0.12),opacity:Some(0.4),alpha_mode:Some(AlphaMode::Blend),normal_scale:Some(0.5),maps:BTreeMap::from([(TextureChannel::Normal,replacement.clone())]),..Default::default()}};
+    let mut train=imported.train;train.carriages[0].body_models[0].material_bindings=vec![binding.clone()];write_train_document(&mut container,0,&train).unwrap();container.commit().unwrap();drop(container);
+    let mut reopened=Container::open(&path).unwrap();let restored=read_train_document(&mut reopened,0).unwrap();assert_eq!(restored,train);assert!(reopened.read_blob(&replacement).is_ok());
+    let preview=asset_preview(&mut reopened,&imported.asset,&[binding]).unwrap();let edited=glb_json(&preview);assert_eq!(edited["materials"][0]["normalTexture"]["scale"],0.5);assert_eq!(edited["materials"][0]["pbrMetallicRoughness"]["metallicFactor"],1.0);
+    assert_eq!(asset_preview(&mut reopened,&imported.asset,&[]).unwrap(),original);
+    drop(reopened);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_materials_have_defaults_and_invalid_edits_are_rejected() {
+    let material:model::ModelMaterial=serde_json::from_value(serde_json::json!({"id":"m","name":"Paint","color":[1,1,1,1],"texture":null})).unwrap();
+    assert_eq!(material.properties,crate::material::MaterialProperties::default());
+    let binding:MaterialBinding=serde_json::from_value(serde_json::json!({"materialId":"m","textureAssetId":"hash"})).unwrap();assert!(binding.properties.maps.is_empty());
+    assert!(crate::material::MaterialProperties{roughness:Some(f32::NAN),..Default::default()}.validate().is_err());
+    assert!(crate::material::MaterialProperties{opacity:Some(2.0),..Default::default()}.validate().is_err());
+}
+
+#[test]
 fn textured_import_reopens_and_replacement_is_independent() {
     let root = std::env::temp_dir().join(format!("mtr-workflow-{}", Uuid::new_v4()));
     fs::create_dir_all(&root).unwrap();
@@ -31,7 +69,7 @@ fn textured_import_reopens_and_replacement_is_independent() {
     image::RgbImage::from_pixel(2,2,image::Rgb([0,255,0])).write_to(&mut image_bytes,image::ImageFormat::Jpeg).unwrap();
     let png = normalize_png(&image_bytes.into_inner()).unwrap(); assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
     let hash = container.put_blob(&png,"image/png").unwrap();
-    let bindings = vec![MaterialBinding { material_id:"material-0".into(), texture_asset_id:Some(hash.clone()) }];
+    let bindings = vec![MaterialBinding { material_id:"material-0".into(), texture_asset_id:Some(hash.clone()), properties: Default::default() }];
     assert_ne!(asset_preview(&mut container,&asset,&bindings).unwrap(),preview);
     assert_eq!(asset_preview(&mut container,&asset,&[]).unwrap(),preview);
     let mut train = imported.train; train.carriages[0].body_models[0].material_bindings = bindings;
