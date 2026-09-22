@@ -1,6 +1,6 @@
 use crate::{
     container::Container,
-    domain::{AssetDefinition, ModelLayer, TrainDefinition},
+    domain::{AssetDefinition, ModelLayer, ModelTransform, TrainDefinition},
     model::{ModelDocument, ModelMaterial, ModelPart},
 };
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,8 @@ pub struct ExportOptions {
     pub minecraft_version: String,
     #[serde(default)]
     pub model_format: String,
+    #[serde(default)]
+    pub only_visible: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -249,11 +251,22 @@ pub fn validate(
                     Some("exportId"),
                 );
             }
-            if carriage.body_models.is_empty() {
+            let has_visible_body = carriage
+                .body_models
+                .iter()
+                .filter(|layer| !options.only_visible || layer.visible)
+                .any(|layer| {
+                    load_asset(container, &layer.asset_id).is_ok_and(|(_, document)| {
+                        document.parts.iter().any(|part| {
+                            !options.only_visible || !layer.hidden_parts.contains(&part.id)
+                        })
+                    })
+                });
+            if !has_visible_body {
                 issue(
                     &mut issues,
                     "error",
-                    "Import at least one body model for this carriage.",
+                    "Include at least one body model part for this carriage before exporting.",
                     Some(&train.id),
                     Some(&carriage.id),
                     Some("bodyModels"),
@@ -301,7 +314,18 @@ pub fn validate(
                 .chain(&carriage.bogie_1_models)
                 .chain(&carriage.bogie_2_models)
             {
+                if options.only_visible && !layer.visible {
+                    continue;
+                }
                 let mut errors: Vec<(String, String)> = Vec::new();
+                if let Err(error) = layer.transform.validate() {
+                    errors.push(("transform".into(), error));
+                }
+                for (part_id, transform) in &layer.part_transforms {
+                    if let Err(error) = transform.validate() {
+                        errors.push((format!("partTransforms.{part_id}"), error));
+                    }
+                }
                 match load_asset(container, &layer.asset_id) {
                     Err(error) => errors.push(("models".into(), error)),
                     Ok((asset, document)) => {
@@ -311,7 +335,13 @@ pub fn validate(
                                 "Model contains no renderable geometry.".into(),
                             ));
                         }
-                        for part in &document.parts {
+                        let mut effective = document.clone();
+                        if let Err(error) =
+                            apply_layer_edits(&mut effective, layer, options.only_visible)
+                        {
+                            errors.push(("transform".into(), error));
+                        }
+                        for part in &effective.parts {
                             if part.positions.is_empty()
                                 || part.indices.is_empty()
                                 || part.indices.len() % 3 != 0
@@ -361,7 +391,7 @@ pub fn validate(
                                 ));
                             }
                         }
-                        for material in &document.materials {
+                        for material in &effective.materials {
                             if material.color.iter().any(|v| !v.is_finite()) {
                                 errors.push((
                                     "materialBindings".into(),
@@ -379,6 +409,9 @@ pub fn validate(
                         }
                         if options.target == "mtr3_nte" {
                             for (part_id, rule) in &layer.part_rules {
+                                if options.only_visible && layer.hidden_parts.contains(part_id) {
+                                    continue;
+                                }
                                 if !document.parts.iter().any(|p| &p.id == part_id) {
                                     errors.push((
                                         format!("partRules.{part_id}"),
@@ -434,6 +467,7 @@ pub fn export(
             &trains,
             &container.index.namespace.clone(),
             &options.model_format,
+            options.only_visible,
             &mut files,
         )?;
     } else {
@@ -441,6 +475,7 @@ pub fn export(
             container,
             &trains,
             &container.index.namespace.clone(),
+            options.only_visible,
             &mut files,
         )?;
     }
@@ -460,6 +495,7 @@ fn build_mtr4(
     trains: &[TrainDefinition],
     namespace: &str,
     format: &str,
+    only_visible: bool,
     files: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<(), String> {
     let mut vehicles = Vec::new();
@@ -473,6 +509,7 @@ fn build_mtr4(
                 "body",
                 &carriage.body_models,
                 format,
+                only_visible,
                 files,
             )?;
             let bogie1 = write_mtr4_layers(
@@ -482,6 +519,7 @@ fn build_mtr4(
                 "bogie1",
                 &carriage.bogie_1_models,
                 format,
+                only_visible,
                 files,
             )?;
             let bogie2 = write_mtr4_layers(
@@ -491,6 +529,7 @@ fn build_mtr4(
                 "bogie2",
                 &carriage.bogie_2_models,
                 format,
+                only_visible,
                 files,
             )?;
             let mut tags = train.tags.clone();
@@ -515,11 +554,17 @@ fn write_mtr4_layers(
     slot: &str,
     layers: &[ModelLayer],
     format: &str,
+    only_visible: bool,
     files: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<Vec<Value>, String> {
     let mut output = Vec::new();
-    for (layer_index, layer) in layers.iter().enumerate() {
+    for (layer_index, layer) in layers
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| !only_visible || layer.visible)
+    {
         let (asset, mut document) = load_asset(container, &layer.asset_id)?;
+        apply_layer_edits(&mut document, layer, only_visible)?;
         name_parts(&mut document, &layer.id);
         let groups = material_groups(&document);
         for (group_index, mut parts) in groups {
@@ -572,6 +617,7 @@ fn build_mtr3(
     container: &mut Container,
     trains: &[TrainDefinition],
     namespace: &str,
+    only_visible: bool,
     files: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<(), String> {
     let mut custom = serde_json::Map::new();
@@ -589,8 +635,9 @@ fn build_mtr3(
                 (&carriage.bogie_1_models, carriage.bogie_1_position),
                 (&carriage.bogie_2_models, carriage.bogie_2_position),
             ] {
-                for layer in layers {
+                for layer in layers.iter().filter(|layer| !only_visible || layer.visible) {
                     let (asset, mut document) = load_asset(container, &layer.asset_id)?;
+                    apply_layer_edits(&mut document, layer, only_visible)?;
                     name_parts(&mut document, &layer.id);
                     // NTE splits OBJ by material groups, including otherwise untextured geometry.
                     if document.parts.iter().any(|part| part.material.is_none()) {
@@ -681,6 +728,100 @@ fn build_mtr3(
 fn export_base(train: &str, carriage: &str) -> String {
     let hash = blake3::hash(format!("{train}\0{carriage}").as_bytes()).to_hex();
     format!("{train}_{carriage}_{}", &hash[..12])
+}
+
+// Three.js Euler XYZ uses Rx * Ry * Rz; vectors are therefore rotated Z, Y, X.
+fn rotate_vector(mut vector: [f32; 3], rotation: [f32; 3]) -> [f32; 3] {
+    let (s, c) = rotation[2].sin_cos();
+    vector = [
+        c * vector[0] - s * vector[1],
+        s * vector[0] + c * vector[1],
+        vector[2],
+    ];
+    let (s, c) = rotation[1].sin_cos();
+    vector = [
+        c * vector[0] + s * vector[2],
+        vector[1],
+        -s * vector[0] + c * vector[2],
+    ];
+    let (s, c) = rotation[0].sin_cos();
+    [
+        vector[0],
+        c * vector[1] - s * vector[2],
+        s * vector[1] + c * vector[2],
+    ]
+}
+
+fn transform_part(part: &mut ModelPart, transform: &ModelTransform) -> Result<(), String> {
+    transform.validate()?;
+    for position in &mut part.positions {
+        let scaled = std::array::from_fn(|axis| position[axis] * transform.scale[axis]);
+        let rotated = rotate_vector(scaled, transform.rotation);
+        *position = std::array::from_fn(|axis| rotated[axis] + transform.translation[axis]);
+        if position.iter().any(|value| !value.is_finite()) {
+            return Err("Model transform exceeds supported coordinate range.".into());
+        }
+    }
+    // Inverse transpose of R*S is R*inverse(S). Positive scales preserve winding.
+    for normal in &mut part.normals {
+        let inverse_scaled = std::array::from_fn(|axis| normal[axis] / transform.scale[axis]);
+        let rotated = rotate_vector(inverse_scaled, transform.rotation);
+        let length = rotated
+            .iter()
+            .map(|value| (*value as f64).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        if !length.is_finite() {
+            return Err("Model transform exceeds supported normal range.".into());
+        }
+        *normal = if length > 0.0 {
+            rotated.map(|value| (value as f64 / length) as f32)
+        } else {
+            [0.0; 3]
+        };
+    }
+    Ok(())
+}
+
+fn apply_layer_edits(
+    document: &mut ModelDocument,
+    layer: &ModelLayer,
+    only_visible: bool,
+) -> Result<(), String> {
+    document
+        .parts
+        .retain(|part| !only_visible || !layer.hidden_parts.contains(&part.id));
+    for part in &mut document.parts {
+        if let Some(transform) = layer.part_transforms.get(&part.id) {
+            transform_part(part, transform)?;
+        }
+        transform_part(part, &layer.transform)?;
+    }
+    // Remove unused materials so hidden parts do not require unavailable textures.
+    let used: BTreeSet<usize> = document
+        .parts
+        .iter()
+        .filter_map(|part| part.material)
+        .collect();
+    let mut indices = BTreeMap::new();
+    let mut materials = Vec::new();
+    for (index, material) in document.materials.iter().enumerate() {
+        if used.contains(&index) {
+            indices.insert(index, materials.len());
+            materials.push(material.clone());
+        }
+    }
+    for part in &mut document.parts {
+        if let Some(index) = part.material {
+            part.material = Some(
+                *indices
+                    .get(&index)
+                    .ok_or_else(|| "Part references a missing material.".to_string())?,
+            );
+        }
+    }
+    document.materials = materials;
+    Ok(())
 }
 
 fn name_parts(document: &mut ModelDocument, layer_id: &str) {
@@ -1047,6 +1188,155 @@ mod tests {
         }
     }
     #[test]
+    fn transforms_match_xyz_euler_and_inverse_transpose_normals() {
+        let old_layer: ModelLayer =
+            serde_json::from_value(json!({"id":"old", "name":"Old", "assetId":"asset"})).unwrap();
+        assert_eq!(old_layer.transform, ModelTransform::default());
+        assert!(old_layer.hidden_parts.is_empty());
+        let mut document = document();
+        document.parts[0].normals = vec![[1.0, 1.0, 0.0]; 3];
+        let mut layer = old_layer;
+        layer.transform.translation = [10.0, 20.0, 30.0];
+        layer.transform.rotation = [0.0, 0.0, std::f32::consts::FRAC_PI_2];
+        layer.transform.scale = [2.0, 1.0, 1.0];
+        layer.part_transforms.insert(
+            "p".into(),
+            ModelTransform {
+                translation: [1.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        );
+        apply_layer_edits(&mut document, &layer, false).unwrap();
+        let part = &document.parts[0];
+        assert_eq!(part.positions[0], [10.0, 22.0, 30.0]);
+        assert!((part.normals[0][0] + 2.0 / 5.0f32.sqrt()).abs() < 0.00001);
+        assert!((part.normals[0][1] - 1.0 / 5.0f32.sqrt()).abs() < 0.00001);
+        assert_eq!(part.indices, [0, 1, 2]);
+        let rotation = rotate_vector([1.0, 2.0, 3.0], [std::f32::consts::FRAC_PI_2; 3]);
+        for (actual, expected) in rotation.into_iter().zip([3.0, -2.0, 1.0]) {
+            assert!((actual - expected).abs() < 0.00001);
+        }
+        layer.transform.scale[0] = 0.0;
+        assert!(layer.transform.validate().is_err());
+        layer.transform.scale[0] = -1.0;
+        assert!(layer.transform.validate().is_err());
+        layer.transform.scale[0] = f32::NAN;
+        assert!(layer.transform.validate().is_err());
+    }
+
+    #[test]
+    fn both_exporters_apply_visibility_and_layer_and_part_transforms() {
+        let mut fixture = Fixture::new();
+        let body = &mut fixture.train.carriages[0].body_models[0];
+        body.hidden_parts = vec!["p2".into(), "stale-part".into()];
+        body.transform.translation = [10.0, 20.0, 30.0];
+        body.transform.scale = [2.0, 3.0, 4.0];
+        body.part_transforms.insert(
+            "p".into(),
+            ModelTransform {
+                translation: [1.0, 0.0, 0.0],
+                ..Default::default()
+            },
+        );
+        let bogie = &mut fixture.train.carriages[0].bogie_1_models[0];
+        bogie.visible = false;
+        bogie.asset_id = "missing-but-hidden".into();
+        fixture.save();
+        for option in [
+            options("mtr4", "obj"),
+            options("mtr4", "mqo"),
+            options("mtr3_nte", "obj"),
+        ] {
+            let output = fixture.root.join("visibility.zip");
+            let option = ExportOptions {
+                only_visible: true,
+                ..option
+            };
+            export(&mut fixture.container, &output, &option).unwrap();
+            let files = unzip(&output);
+            let models: Vec<_> = files
+                .iter()
+                .filter(|(path, _)| path.ends_with(".obj") || path.ends_with(".mqo"))
+                .collect();
+            assert_eq!(models.len(), 1);
+            let model = std::str::from_utf8(models[0].1).unwrap();
+            if option.model_format == "mqo" {
+                assert!(model.contains("1200 2000 3000"), "{model}");
+                assert_eq!(model.matches("Object ").count(), 1);
+            } else {
+                // Export coordinate conversion negates canonical X.
+                assert!(model.contains("v -12 20 30"), "{model}");
+                assert_eq!(
+                    model.lines().filter(|line| line.starts_with("v ")).count(),
+                    3
+                );
+                assert_eq!(
+                    model.lines().filter(|line| line.starts_with("g ")).count(),
+                    1
+                );
+            }
+        }
+        let body = &mut fixture.train.carriages[0].body_models[0];
+        body.hidden_parts.push("p".into());
+        fixture.save();
+        assert!(validate(
+            &mut fixture.container,
+            &ExportOptions {
+                only_visible: true,
+                ..options("mtr4", "obj")
+            }
+        )
+        .unwrap()
+        .iter()
+        .any(|issue| issue.field.as_deref() == Some("bodyModels")));
+        fixture.finish();
+    }
+
+    #[test]
+    fn export_includes_hidden_geometry_by_default() {
+        let legacy: ExportOptions = serde_json::from_value(
+            json!({"target":"mtr4", "minecraftVersion":"1.20.4", "modelFormat":"obj"}),
+        )
+        .unwrap();
+        assert!(!legacy.only_visible);
+        let mut fixture = Fixture::new();
+        fixture.train.carriages[0].body_models[0]
+            .transform
+            .translation = [3.0, 4.0, 5.0];
+        fixture.save();
+        for option in [
+            options("mtr4", "obj"),
+            options("mtr4", "mqo"),
+            options("mtr3_nte", "obj"),
+        ] {
+            let output = fixture.root.join("default-visibility.zip");
+            export(&mut fixture.container, &output, &option).unwrap();
+            let original = unzip(&output);
+            fixture.train.carriages[0].body_models[0].hidden_parts = vec!["p".into(), "p2".into()];
+            fixture.train.carriages[0].body_models[0].visible = false;
+            fixture.train.carriages[0].bogie_1_models[0].visible = false;
+            fixture.save();
+            export(&mut fixture.container, &output, &option).unwrap();
+            assert_eq!(original, unzip(&output));
+            let visible_only = ExportOptions {
+                only_visible: true,
+                ..option
+            };
+            assert!(validate(&mut fixture.container, &visible_only)
+                .unwrap()
+                .iter()
+                .any(|issue| issue.field.as_deref() == Some("bodyModels")));
+            fixture.train.carriages[0].body_models[0]
+                .hidden_parts
+                .clear();
+            fixture.train.carriages[0].body_models[0].visible = true;
+            fixture.train.carriages[0].bogie_1_models[0].visible = true;
+            fixture.save();
+        }
+        fixture.finish();
+    }
+
+    #[test]
     fn pack_versions_are_pinned() {
         assert_eq!(pack_format("mtr4", "1.20.4"), Some(22));
         assert_eq!(pack_format("mtr3_nte", "1.16.5"), Some(6));
@@ -1101,6 +1391,9 @@ mod tests {
             visible: true,
             material_bindings: vec![],
             part_rules: BTreeMap::new(),
+            hidden_parts: vec![],
+            transform: Default::default(),
+            part_transforms: BTreeMap::new(),
         });
         let train_hash = container
             .put_blob(
@@ -1122,11 +1415,13 @@ mod tests {
                 target: "mtr4".into(),
                 minecraft_version: "1.20.4".into(),
                 model_format: "obj".into(),
+                only_visible: false,
             },
             ExportOptions {
                 target: "mtr3_nte".into(),
                 minecraft_version: "1.20.1".into(),
                 model_format: "obj".into(),
+                only_visible: false,
             },
         ] {
             let output = root.join(format!("{}.zip", options.target));
@@ -1225,6 +1520,9 @@ mod tests {
                 visible: true,
                 material_bindings: vec![],
                 part_rules: BTreeMap::new(),
+                hidden_parts: vec![],
+                transform: Default::default(),
+                part_transforms: BTreeMap::new(),
             };
             train.carriages[0].body_models.push(layer.clone());
             let mut bogie = layer;
@@ -1277,6 +1575,7 @@ mod tests {
             target: target.into(),
             minecraft_version: if target == "mtr4" { "1.20.4" } else { "1.20.1" }.into(),
             model_format: format.into(),
+            only_visible: false,
         }
     }
     fn unzip(path: &Path) -> BTreeMap<String, Vec<u8>> {

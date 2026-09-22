@@ -55,6 +55,30 @@ pub struct ModelLayer {
     #[serde(default = "default_true")] pub visible: bool,
     #[serde(default)] pub material_bindings: Vec<MaterialBinding>,
     #[serde(default)] pub part_rules: BTreeMap<String, CarPlacementRule>,
+    #[serde(default)] pub hidden_parts: Vec<String>,
+    #[serde(default)] pub transform: ModelTransform,
+    #[serde(default)] pub part_transforms: BTreeMap<String, ModelTransform>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTransform {
+    #[serde(default)] pub translation: [f32; 3],
+    #[serde(default)] pub rotation: [f32; 3],
+    #[serde(default = "identity_scale")] pub scale: [f32; 3],
+}
+
+fn identity_scale() -> [f32; 3] { [1.0; 3] }
+impl Default for ModelTransform {
+    fn default() -> Self { Self { translation: [0.0; 3], rotation: [0.0; 3], scale: identity_scale() } }
+}
+impl ModelTransform {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.translation.iter().chain(&self.rotation).chain(&self.scale).any(|v| !v.is_finite()) || self.scale.iter().any(|v| *v <= 0.0) {
+            return Err("Model transforms require finite values and positive scales.".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -98,7 +98,7 @@ fn authored_train_round_trips_and_exports_all_three_formats() {
     let body=read_asset(&mut container,&train.carriages[0].body_models[0].asset_id).unwrap();
     let preview=asset_preview(&mut container,&body,&[]).unwrap();assert_eq!(glb_json(&preview)["images"].as_array().unwrap().len(),2);
     for (name,target,version,format) in [("mtr4-obj","mtr4","1.20.4","obj"),("mtr4-mqo","mtr4","1.20.4","mqo"),("mtr3-nte","mtr3_nte","1.20.1","obj")] {
-        let report=exporter::export(&mut container,&directory.join(format!("{name}.zip")),&ExportOptions{target:target.into(),minecraft_version:version.into(),model_format:format.into()}).unwrap();
+        let report=exporter::export(&mut container,&directory.join(format!("{name}.zip")),&ExportOptions{target:target.into(),minecraft_version:version.into(),model_format:format.into(),only_visible:false}).unwrap();
         assert!(report.file_count>8);
     }
     // Keep reviewable native artifacts outside the source tree for desktop/game acceptance.
