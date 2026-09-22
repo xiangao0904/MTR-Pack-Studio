@@ -198,7 +198,7 @@ function updateSelection() {
     if (props.selectedPart ? object.userData.partId === props.selectedPart : object.userData.isLayerRoot) selectedObject = object
   })
   if (selectedObject) {
-    selection = new THREE.Box3Helper(new THREE.Box3(),0xc6e2ff); scene.add(selection); updateSelectionBounds()
+    selection = new THREE.Box3Helper(new THREE.Box3(),0xe0e3e9); scene.add(selection); updateSelectionBounds()
   }
 }
 function updateSelectionBounds() {
@@ -224,14 +224,14 @@ function click(event: MouseEvent) {
 }
 onMounted(()=>{
   if(!host.value)return
-  scene=new THREE.Scene();scene.background=new THREE.Color(0x151a1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,5,12)
+  scene=new THREE.Scene();scene.background=new THREE.Color(0x191b1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,5,12)
   try { renderer=new THREE.WebGLRenderer({antialias:true}) } catch(cause) { emit('error',String(cause)); return }
   renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.shadowMap.autoUpdate=false;host.value.append(renderer.domElement)
   changeCamera()
   const room = new RoomEnvironment(); const pmrem = new THREE.PMREMGenerator(renderer)
   environmentTarget = pmrem.fromScene(room, 0.04); room.dispose(); pmrem.dispose()
   environment = new PreviewEnvironment(scene, environmentTarget.texture); updateEnvironment()
-  grid=new THREE.GridHelper(100,100,0x52606c,0x28323a);grid.visible=props.showGrid;scene.add(grid)
+  grid=new THREE.GridHelper(100,100,0x42454b,0x26292e);grid.visible=props.showGrid;scene.add(grid)
   renderer.domElement.addEventListener('click',click);renderer.domElement.addEventListener('pointerdown',pointerDown)
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);updateProjection()});resize.observe(host.value)
   const animate=()=>{frame=requestAnimationFrame(animate);controls?.update();if(camera)environment?.updateCamera(camera);updateOrientation();updateSelectionBounds();if(scene&&camera)renderer?.render(scene,camera)};animate();void rebuild()
@@ -247,4 +247,4 @@ onBeforeUnmount(()=>{disposed=true;generation++;cancelAnimationFrame(frame);resi
 defineExpose({fitView:frameContent})
 </script>
 <template><div ref="host" class="model-viewport"><svg class="orientation" viewBox="-45 -45 90 90" aria-hidden="true"><g v-for="axis in orientationAxes" :key="axis.name" :stroke="axis.color" :fill="axis.color"><line x1="0" y1="0" :x2="axis.x" :y2="axis.y" stroke-width="1.6"/><text :x="axis.x * 1.3" :y="axis.y * 1.3 + 4" text-anchor="middle" stroke="none">{{ axis.name }}</text></g></svg><div v-if="!assets.length" class="viewport-empty">{{ t('previewEmpty') }}</div></div></template>
-<style scoped>.orientation{position:absolute;z-index:2;right:12px;top:12px;width:88px;height:88px;pointer-events:none;font-size:11px;font-weight:600}.model-viewport{position:relative;width:100%;height:100%;min-height:220px;overflow:hidden;background:#151a1f}.model-viewport :deep(canvas){display:block;width:100%;height:100%}.viewport-empty{position:absolute;z-index:1;inset:0;display:grid;place-items:center;color:#77838e;font-size:12px;pointer-events:none}</style>
+<style scoped>.orientation{position:absolute;z-index:2;right:12px;top:12px;width:88px;height:88px;pointer-events:none;font-size:11px;font-weight:600}.model-viewport{position:relative;width:100%;height:100%;min-height:220px;overflow:hidden;background:#191b1f}.model-viewport :deep(canvas){display:block;width:100%;height:100%}.viewport-empty{position:absolute;z-index:1;inset:0;display:grid;place-items:center;color:#77838e;font-size:12px;pointer-events:none}</style>

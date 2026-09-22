@@ -40,7 +40,7 @@ export class PreviewEnvironment {
     this.bounds.makeEmpty();root?.updateWorldMatrix(true,true)
     root?.traverse(object=>{if(object instanceof THREE.Mesh && visible(object)) {if(!object.geometry.boundingBox)object.geometry.computeBoundingBox();if(object.geometry.boundingBox)this.bounds.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld))}})
     if(this.bounds.isEmpty())this.bounds.set(new THREE.Vector3(-1,0,-1),new THREE.Vector3(1,2,1))
-    this.scene.background=new THREE.Color(mode==='minecraft'?0x83b6f4:mode==='material'?0x252b32:0x20252a)
+    this.scene.background=new THREE.Color(mode==='minecraft'?0x83b6f4:mode==='material'?0x202226:0x191b1f)
     this.scene.fog=null;this.scene.environment=mode==='studio'?null:this.environmentMap??null
     this.scene.environmentIntensity=this.settings.environmentIntensity
     const center=this.bounds.getCenter(new THREE.Vector3()),extent=this.bounds.getSize(new THREE.Vector3())
