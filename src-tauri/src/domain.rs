@@ -82,34 +82,44 @@ impl CarPlacementRule {
     pub fn expressions(&self) -> Result<(String, String), String> {
         Ok(match self.preset {
             PlacementPreset::All => (String::new(), String::new()),
-            PlacementPreset::First => ("1".into(), String::new()),
-            PlacementPreset::Last => ("-1".into(), String::new()),
-            PlacementPreset::Odd => ("%2+1".into(), String::new()),
-            PlacementPreset::Even => ("%2".into(), String::new()),
+            PlacementPreset::First => ("1".into(), "%1".into()),
+            PlacementPreset::Last => ("-1".into(), "%1".into()),
+            PlacementPreset::Odd => ("%2+1".into(), "%1".into()),
+            PlacementPreset::Even => ("%2".into(), "%1".into()),
             PlacementPreset::Every => {
-                let every = self.every.filter(|value| *value > 0).ok_or_else(|| "Every placement requires a positive interval.".to_string())?;
-                let offset = if self.offset == 0 { String::new() } else { format!("{:+}", self.offset) };
-                (format!("%{every}{offset}"), String::new())
+                let every = self.every.filter(|value| *value > 0 && *value <= i32::MAX as u32).ok_or_else(|| "Every placement requires a positive interval.".to_string())?;
+                let additional = (-(self.offset as i64)).rem_euclid(every as i64);
+                let offset = if additional == 0 { String::new() } else { format!("+{additional}") };
+                (format!("%{every}{offset}"), "%1".into())
             }
             PlacementPreset::Custom => {
-                validate_filter(&self.whitelist)?;
-                validate_filter(&self.blacklist)?;
-                (self.whitelist.trim().into(), self.blacklist.trim().into())
+                (normalize_filter(&self.whitelist)?, normalize_filter(&self.blacklist)?)
             }
         })
     }
 }
 
-fn validate_filter(filter: &str) -> Result<(), String> {
+// MTR uses match strengths: exact position (3), periodic match (2), no match (0).
+// A part is hidden only if the blacklist strength is greater; equal matches remain visible.
+fn normalize_filter(filter: &str) -> Result<String, String> {
+    let mut normalized = Vec::new();
     for token in filter.split(',').map(str::trim).filter(|token| !token.is_empty()) {
-        let valid = if let Some(rest) = token.strip_prefix('%') {
+        let error = || format!("Invalid car placement expression: {token}");
+        if let Some(rest) = token.strip_prefix('%') {
             let split_at = rest.char_indices().skip(1).find(|(_, c)| matches!(c, '+' | '-')).map(|(index, _)| index);
-            let (divisor, offset) = split_at.map_or((rest, ""), |index| (&rest[..index], &rest[index..]));
-            divisor.parse::<u32>().is_ok_and(|value| value > 0) && (offset.is_empty() || offset.parse::<i32>().is_ok())
-        } else { token.parse::<i32>().is_ok_and(|value| value != 0) };
-        if !valid { return Err(format!("Invalid car placement expression: {token}")); }
+            let (divisor, suffix) = split_at.map_or((rest, ""), |index| (&rest[..index], &rest[index..]));
+            let every = divisor.parse::<i32>().ok().filter(|n| *n > 0).ok_or_else(error)?;
+            if suffix == "+" || suffix == "-" { return Err(error()); }
+            let suffix = suffix.strip_prefix('+').unwrap_or(suffix);
+            let additional = if suffix.is_empty() { 0 } else { suffix.parse::<i32>().map_err(|_|error())? };
+            // Native parser splits on '+', so a negative offset is emitted as '+-N'.
+            normalized.push(if additional==0 { format!("%{every}") } else { format!("%{every}+{additional}") });
+        } else {
+            let position=token.parse::<i32>().ok().filter(|n|*n!=0).ok_or_else(error)?;
+            normalized.push(position.to_string());
+        }
     }
-    Ok(())
+    Ok(normalized.join(","))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -186,8 +196,40 @@ mod tests {
     use super::*;
     #[test] fn placement_presets_compile_to_mtr_filters() {
         assert_eq!(CarPlacementRule { preset: PlacementPreset::Last, ..Default::default() }.expressions().unwrap().0, "-1");
-        assert_eq!(CarPlacementRule { preset: PlacementPreset::Every, every: Some(3), offset: 1, ..Default::default() }.expressions().unwrap().0, "%3+1");
+        assert_eq!(CarPlacementRule { preset: PlacementPreset::Every, every: Some(3), offset: 1, ..Default::default() }.expressions().unwrap().0, "%3+2");
         assert!(CarPlacementRule { preset: PlacementPreset::Custom, whitelist: "%0".into(), ..Default::default() }.expressions().is_err());
     }
     #[test] fn slugs_are_valid_resource_identifiers() { assert_eq!(slugify("Urban Rail / 2026", "train"), "urban_rail_2026"); }
+    // Mirrors the official MTR 3 DynamicTrainModel strength calculation.
+    fn native_strength(filter: &str, position: i32, count: i32) -> u8 {
+        let mut strength = 0;
+        for token in filter.split(',').filter(|token|!token.is_empty()) {
+            if let Some(periodic) = token.strip_prefix('%') {
+                let (multiple,additional) = periodic.split_once('+').unwrap_or((periodic,"0"));
+                if (position+additional.parse::<i32>().unwrap())%multiple.parse::<i32>().unwrap()==0 {strength=strength.max(2);}
+            } else {
+                let number=token.parse::<i32>().unwrap();
+                if number==position || number==position-count-1 {return 3;}
+            }
+        }
+        strength
+    }
+    fn native_positions(rule: CarPlacementRule) -> Vec<i32> {
+        let (white,black)=rule.expressions().unwrap();
+        (1..=6).filter(|position| native_strength(&black,*position,6)<=native_strength(&white,*position,6)).collect()
+    }
+    #[test]
+    fn placement_presets_render_only_the_intended_positions_in_mtr3() {
+        assert_eq!(native_positions(CarPlacementRule{preset:PlacementPreset::First,..Default::default()}),vec![1]);
+        assert_eq!(native_positions(CarPlacementRule{preset:PlacementPreset::Last,..Default::default()}),vec![6]);
+        assert_eq!(native_positions(CarPlacementRule{preset:PlacementPreset::Odd,..Default::default()}),vec![1,3,5]);
+        assert_eq!(native_positions(CarPlacementRule{preset:PlacementPreset::Even,..Default::default()}),vec![2,4,6]);
+        assert_eq!(native_positions(CarPlacementRule{preset:PlacementPreset::Every,every:Some(3),offset:1,..Default::default()}),vec![1,4]);
+        assert_eq!(native_positions(CarPlacementRule{preset:PlacementPreset::Every,every:Some(3),offset:-1,..Default::default()}),vec![2,5]);
+        let custom=CarPlacementRule{preset:PlacementPreset::Custom,whitelist:" 1, %3-1 ".into(),blacklist:"%1".into(),..Default::default()};
+        assert_eq!(custom.expressions().unwrap(),("1,%3+-1".into(),"%1".into()));
+        assert_eq!(native_positions(custom),vec![1,4]);
+        assert!(CarPlacementRule{preset:PlacementPreset::Custom,whitelist:"%3+".into(),..Default::default()}.expressions().is_err());
+    }
+
 }
