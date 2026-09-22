@@ -1,0 +1,45 @@
+/* Shared desktop workspace language. Home keeps its original presentation. */
+:root {
+  --studio-font: 'Segoe UI Variable', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --studio-bg: #191b1f;
+  --studio-surface: #1d1f23;
+  --studio-raised: #24262b;
+  --studio-border: #ffffff0e;
+  --studio-text: #eef0f3;
+  --studio-muted: #a2a5ad;
+  --studio-quiet: #787d87;
+  --studio-hover: #ffffff06;
+  --studio-selected: #ffffff0c;
+}
+.studio-shell {color-scheme:dark;font-family:var(--studio-font);background:var(--studio-bg);color:var(--studio-text)}
+.studio-shell button,.studio-shell input,.studio-shell select,.studio-shell textarea {font-family:inherit}
+.studio-shell :focus-visible {outline:1px solid #c2c7d1;outline-offset:2px}
+.studio-shell ::selection {background:#565c69;color:#fff}
+.studio-shell ::-webkit-scrollbar {width:6px;height:6px}
+.studio-shell ::-webkit-scrollbar-thumb {background:#ffffff1b;border-radius:8px}
+.studio-shell ::-webkit-scrollbar-track {background:transparent}
+.workspace-titlebar {height:48px;padding:0 16px;gap:12px;background:var(--studio-surface);border-bottom:1px solid var(--studio-border)}
+.workspace-titlebar .brand-mark {width:25px;height:25px;font-size:17px;border-radius:5px;background:#dee1e7;color:#282b31;border-color:#e2e5eb;padding-right:2px;letter-spacing:-1px}
+.workspace-titlebar .brand-name {font:600 13px var(--studio-font);letter-spacing:-.02em}
+.workspace-titlebar .brand-tagline,.workspace-titlebar .beta {display:none}
+.workspace-titlebar .brand-copy {padding-right:22px;border-right:1px solid var(--studio-border)}
+.editor-breadcrumbs {display:flex;align-items:center;gap:12px;min-width:0;color:var(--studio-muted);font-size:12px}
+.editor-breadcrumbs button {border:0;background:none;color:inherit;padding:5px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.editor-breadcrumbs button:hover {color:var(--studio-text)}
+.editor-breadcrumbs strong {font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--studio-text)}
+.editor-breadcrumbs span {color:#60646d}
+.editor-save {margin-left:auto;color:var(--studio-muted);font-size:11px;white-space:nowrap}
+.editor-save.failed {color:#eca7a7}
+.workspace-titlebar .titlebar-actions {margin-left:14px;gap:16px;align-items:center}
+.workspace-titlebar .titlebar-actions button {font-size:11px;color:var(--studio-muted);gap:6px}
+.workspace-titlebar .utility-action svg {width:15px;height:15px}
+.workspace-titlebar .titlebar-divider {height:18px;background:var(--studio-border)}
+.studio-shell .project-artwork {background:#272a2f}
+.studio-shell .project-artwork .default-artwork {filter:grayscale(1)}
+.studio-shell .toast {background:var(--studio-raised);border-color:var(--studio-border);color:var(--studio-text);font-size:12px}
+@media(max-width:1100px) {
+ .workspace-titlebar .utility-action {font-size:0!important;gap:0!important}
+ .editor-breadcrumbs button {max-width:140px}
+ .workspace-titlebar .brand-copy {padding-right:12px}
+ .workspace-titlebar .titlebar-actions {gap:10px}
+}

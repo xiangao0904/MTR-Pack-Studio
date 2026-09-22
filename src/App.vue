@@ -111,10 +111,10 @@ function dateLabel(timestamp: number) {
 </script>
 
 <template>
-  <div class="app-shell">
-    <header :class="['titlebar',{'editor-titlebar':editing}]" @mousedown="dragTitlebar">
+  <div :class="['app-shell', {'studio-shell': activeProject}]">
+    <header :class="['titlebar',{'workspace-titlebar':activeProject}]" @mousedown="dragTitlebar">
       <div class="brand-mark">M</div><div class="brand-copy"><div class="brand-name">MTR Pack Studio <span class="beta">Beta</span></div><div class="brand-tagline">{{ t('productTagline') }}</div></div>
-      <nav v-if="editing" class="editor-breadcrumbs"><button @click="returnHome">{{ t('home') }}</button><span>/</span><button @click="workspace?.overview()">{{ activeProject?.name }}</button><span>/</span><strong>{{ editorContext.name }}</strong></nav><span v-if="editing" :class="['editor-save',editorContext.status]">{{ editorContext.status==='saving'?t('saving'):editorContext.status==='failed'?t('saveFailed'):t('saved') }}</span>
+      <nav v-if="activeProject" class="editor-breadcrumbs"><button @click="returnHome">{{ t('home') }}</button><span>/</span><button @click="workspace?.overview()">{{ activeProject?.name }}</button><template v-if="editing"><span>/</span><strong>{{ editorContext.name }}</strong></template></nav><span v-if="activeProject" :class="['editor-save',editorContext.status]">{{ editorContext.status==='saving'?t('saving'):editorContext.status==='failed'?t('saveFailed'):t('saved') }}</span>
       <div class="titlebar-actions"><button class="utility-action" @click="notice = t('settingsLater')"><Settings2 :size="19" />{{ t('settings') }}</button><button class="utility-action" @click="notice = t('helpLater')"><HelpCircle :size="19" />{{ t('help') }}</button><span class="titlebar-divider" aria-hidden="true"></span><button class="window-control" :aria-label="t('minimize')" :title="t('minimize')" @click="windowAction('minimize')"><Minus :size="19" /></button><button class="window-control" :aria-label="t('maximize')" :title="t('maximize')" @click="windowAction('toggleMaximize')"><Square :size="16" /></button><button class="window-control close-control" :aria-label="t('close')" :title="t('close')" @click="windowAction('close')"><X :size="20" /></button></div>
     </header>
     <div v-if="!activeProject" class="body-shell">
