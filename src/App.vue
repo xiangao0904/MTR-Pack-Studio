@@ -8,6 +8,12 @@ import ProjectWorkspace from './components/ProjectWorkspace.vue'
 import ProjectArtwork from './components/ProjectArtwork.vue'
 import { chooseProjectSavePath, closeProject, createProject, loadRecentProjects, openProject, removeRecentProject, saveProject, takePendingProjectPath, type ProjectSummary } from './lib/projects'
 
+function displayPath(path: string): string {
+  if (path.startsWith('\\\\?\\UNC\\')) return `\\\\${path.slice(8)}`
+  if (/^\\\\\?\\[a-zA-Z]:\\/.test(path)) return path.slice(4)
+  return path
+}
+
 type Page = 'home' | 'recent' | 'all'
 const page = ref<Page>('home')
 const view = ref<'list' | 'grid'>('list')
@@ -132,7 +138,7 @@ function dateLabel(timestamp: number) {
           <button class="quick-card secondary" @click="chooseProject"><Folder :size="33" /><span><strong>{{ t('openProject') }}</strong><small>{{ t('openHint') }}</small></span><ArrowRight class="quick-arrow" :size="21" /></button>
         </div></section>
         <section class="projects-section"><div class="section-heading"><div><span class="eyebrow">{{ page === 'all' ? t('libraryEyebrow') : t('recentEyebrow') }}</span><h2>{{ page === 'all' ? t('allProjects') : t('recentProjects') }}</h2></div><div class="section-tools"><label class="search-box"><Search :size="18" /><input v-model="query" :placeholder="t('search')" /></label><div class="view-toggle"><button :class="{ active: view === 'grid' }" :aria-label="t('gridView')" @click="view = 'grid'"><Grid2X2 :size="19" /></button><button :class="{ active: view === 'list' }" :aria-label="t('listView')" @click="view = 'list'"><List :size="20" /></button></div></div></div>
-          <div v-if="filteredProjects.length" :class="['project-collection', view]"><div v-if="view === 'list'" class="list-header"><span>{{ t('name') }}</span><span>{{ t('lastOpened') }}</span><span>{{ t('location') }}</span></div><div v-for="project in filteredProjects" :key="project.path" class="project-row" @click="reopenProject(project)"><div class="project-identity"><div class="project-thumb"><ProjectArtwork :path="project.path" :revision="project.lastOpened" /></div><div><strong>{{ project.name }}</strong><small>{{ t('pack') }}</small></div></div><span class="project-date">{{ dateLabel(project.lastOpened) }}</span><span class="project-path" :title="project.path">{{ project.path }}</span><div class="row-menu"><button :aria-label="t('more')" @click.stop="menuFor = menuFor === project.path ? null : project.path"><MoreHorizontal :size="20" /></button><div v-if="menuFor === project.path" class="menu-popover"><button @click.stop="forgetProject(project.path)">{{ t('remove') }}</button></div></div></div></div>
+          <div v-if="filteredProjects.length" :class="['project-collection', view]"><div v-if="view === 'list'" class="list-header"><span>{{ t('name') }}</span><span>{{ t('lastOpened') }}</span><span>{{ t('location') }}</span></div><div v-for="project in filteredProjects" :key="project.path" class="project-row" @click="reopenProject(project)"><div class="project-identity"><div class="project-thumb"><ProjectArtwork :path="project.path" :revision="project.lastOpened" /></div><div><strong>{{ project.name }}</strong><small>{{ t('pack') }}</small></div></div><span class="project-date">{{ dateLabel(project.lastOpened) }}</span><span class="project-path" :title="displayPath(project.path)">{{ displayPath(project.path) }}</span><div class="row-menu"><button :aria-label="t('more')" @click.stop="menuFor = menuFor === project.path ? null : project.path"><MoreHorizontal :size="20" /></button><div v-if="menuFor === project.path" class="menu-popover"><button @click.stop="forgetProject(project.path)">{{ t('remove') }}</button></div></div></div></div>
           <div v-else class="empty-projects"><FolderOpen :size="36" :stroke-width="1.4" /><strong>{{ query ? t('noMatches') : t('empty') }}</strong><span>{{ query ? t('trySearch') : t('emptyHint') }}</span></div>
         </section><button class="drop-zone" @click="chooseProject"><Folder :size="31" /><span><strong>{{ t('drop') }}</strong><small>{{ t('dropHint') }}</small></span></button>
       </div><footer class="statusbar"><span><Info :size="17" />{{ t('tip') }}</span><span>✦ &nbsp; {{ t('footerCredit') }}</span></footer></main>
