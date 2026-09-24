@@ -5,7 +5,7 @@ import { PreviewRenderer, filterModelTextures, prepareMaterialTextures } from '.
 import { PreviewEnvironment, type PreviewLightingMood } from '../lib/preview-environment'
 import type { PreviewRenderMode, ViewportSettings } from '../lib/viewport-settings'
 import { PreviewEnvironmentMap } from '../lib/preview-environment-map'
-import { normalizeViewportSettings } from '../lib/viewport-settings'
+import { defaultViewportSettings, normalizeViewportSettings } from '../lib/viewport-settings'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { getModelPreview, type MaterialBinding } from '../lib/projects'
@@ -14,8 +14,8 @@ import { t } from '../i18n'
 export interface PreviewTransform { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }
 export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
 export interface PreviewGuide { key: string; length: number; width: number; z: number; reversed: boolean }
-const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; thumbnailCarriageId?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, renderMode: 'studio' })
-const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, bytes: Uint8Array] }>()
+const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; thumbnailCarriageId?: string; thumbnailModelSignature?: string; thumbnailSavedSignature?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, renderMode: 'studio' })
+const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, signature: string, bytes: Uint8Array] }>()
 const host = ref<HTMLDivElement>()
 const modeTransitionKey = ref(0)
 const orientationAxes = ref([{name:'X',color:'#ed777c',x:28,y:0},{name:'Y',color:'#87dca3',x:0,y:-28},{name:'Z',color:'#80b6f1',x:-20,y:18}])
@@ -54,7 +54,7 @@ let minecraftFramed = false
 let cameraTween: {start: number; fromPosition: THREE.Vector3; toPosition: THREE.Vector3; fromTarget: THREE.Vector3; toTarget: THREE.Vector3; fromHeight: number; toHeight: number} | undefined
 let lightingTween: {start: number; from: PreviewLightingMood; to: PreviewLightingMood} | undefined
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
-let thumbnailSignature = ''
+const requestedThumbnails = new Map<string, string>()
 let pointerStart = new THREE.Vector2()
 const byteCache = new Map<string, Promise<ArrayBuffer>>()
 
@@ -134,10 +134,10 @@ async function rebuild() {
   content = group; scene.add(content); updateEnvironment(); rebuildGuides(); updateSelection()
   const keys = props.assets.map(item => item.key).join('|') + props.guides.map(item => item.key).join('|')
   if (keys !== previousKeys) { frameContent(false); previousKeys = keys }
-  const signature = JSON.stringify(props.assets)
-  if (complete && props.thumbnailCarriageId && signature !== thumbnailSignature && props.assets.length) {
-    thumbnailSignature = signature
-    void captureThumbnail(props.thumbnailCarriageId)
+  const carriageId=props.thumbnailCarriageId,signature=props.thumbnailModelSignature
+  if (complete && carriageId && signature && signature!==props.thumbnailSavedSignature && requestedThumbnails.get(carriageId)!==signature && props.assets.length) {
+    requestedThumbnails.set(carriageId,signature)
+    try { captureThumbnail(carriageId,signature) } catch(cause) { requestedThumbnails.delete(carriageId);emit('error',cause instanceof Error?cause.message:String(cause)) }
   }
 }
 function rebuildGuides() {
@@ -157,9 +157,9 @@ function contentBounds() {
   for (const guide of props.guides) { box.expandByPoint(new THREE.Vector3(-guide.width/2,0,guide.z-guide.length/2)); box.expandByPoint(new THREE.Vector3(guide.width/2,3,guide.z+guide.length/2)) }
   return box
 }
-function positionCamera(target: THREE.PerspectiveCamera, box: THREE.Box3) {
+function positionCamera(target: THREE.PerspectiveCamera, box: THREE.Box3, mode: PreviewRenderMode) {
   const center=box.getCenter(new THREE.Vector3()); const size=Math.max(2,box.getSize(new THREE.Vector3()).length())
-  target.position.copy(center).add(props.renderMode === 'minecraft' ? new THREE.Vector3(size*.72,size*.1,size*.82) : new THREE.Vector3(size*.65,size*.4,size*.75)); target.near=Math.max(.01,size/1000); target.far=Math.max(100,size*20); target.lookAt(center); target.updateProjectionMatrix(); return center
+  target.position.copy(center).add(mode === 'minecraft' ? new THREE.Vector3(size*.72,size*.1-1,size*.82) : new THREE.Vector3(size*.65,size*.4-1,size*.75)); target.near=Math.max(.01,size/1000); target.far=Math.max(100,size*20); target.lookAt(center); target.updateProjectionMatrix(); return center
 }
 function applyTransform(object: THREE.Object3D, transform?: PreviewTransform) {
   if (!transform) return
@@ -180,7 +180,7 @@ function frameContent(animate = true) {
   const fromPosition = camera.position.clone(), fromTarget = controls.target.clone(), fromHeight = orthoHeight
   const center = box.getCenter(new THREE.Vector3()); const extent = box.getSize(new THREE.Vector3())
   const size = Math.max(2, extent.length()); camera.near = .01; camera.far = Math.max(1000, size * 20)
-  if (camera instanceof THREE.PerspectiveCamera) positionCamera(camera, box)
+  if (camera instanceof THREE.PerspectiveCamera) positionCamera(camera, box, props.renderMode)
   else {
     const directions = {front: [0,0,1], back: [0,0,-1], left: [1,0,0], right: [-1,0,0], top: [0,1,0]} as const
     const view = props.cameraView === 'perspective' ? 'front' : props.cameraView ?? 'front'
@@ -207,7 +207,7 @@ function changeCamera() {
   if (camera instanceof THREE.PerspectiveCamera && controls) perspectivePose = {position: camera.position.clone(), target: oldTarget.clone(), zoom: camera.zoom}
   controls?.dispose()
   camera = props.cameraView && props.cameraView !== 'perspective' ? new THREE.OrthographicCamera(-10,10,10,-10,.01,10000) : new THREE.PerspectiveCamera(45,1,.01,10000)
-  camera.position.set(8,5,12)
+  camera.position.set(8,4,12)
   pipeline?.setCamera(camera)
   controls = new OrbitControls(camera,renderer.domElement); controls.enableDamping = true
   controls.enableRotate = camera instanceof THREE.PerspectiveCamera; controls.target.copy(oldTarget)
@@ -217,21 +217,30 @@ function changeCamera() {
     updateProjection(); controls.update()
   } else { updateProjection(); frameContent(false) }
 }
-function captureThumbnail(carriageId: string) {
-  if (!renderer || !scene || !content) return
+function captureThumbnail(carriageId: string, signature: string) {
+  if (!renderer || !content) return
   const box = contentBounds(); if(box.isEmpty())return
-  const thumbCamera = new THREE.PerspectiveCamera(45, 1.5, .01, 10000); positionCamera(thumbCamera,box)
-  const size = renderer.getSize(new THREE.Vector2()); const ratio=renderer.getPixelRatio(); const gridVisible=grid?.visible; const guidesVisible=guides?.visible; const selectionVisible=selection?.visible
-  let data: string
+  const thumbCamera = new THREE.PerspectiveCamera(45, 1.5, .01, 10000); positionCamera(thumbCamera,box,'studio')
+  const thumbScene=new THREE.Scene(),thumbContent=content.clone(true);thumbScene.add(thumbContent)
+  const size = renderer.getSize(new THREE.Vector2()),ratio=renderer.getPixelRatio()
+  let thumbPipeline:PreviewRenderer|undefined,thumbMap:PreviewEnvironmentMap|undefined,thumbEnvironment:PreviewEnvironment|undefined,data:string|undefined
   try {
-    if(grid)grid.visible=false;if(guides)guides.visible=false;if(selection)selection.visible=false
-    renderer.setPixelRatio(1);renderer.setSize(240,160,false);pipeline?.setCamera(thumbCamera);pipeline?.setSize(240,160,1);pipeline?.render()
+    const settings=defaultViewportSettings('studio')
+    thumbPipeline=new PreviewRenderer(renderer,thumbScene,thumbCamera)
+    thumbMap=new PreviewEnvironmentMap(renderer)
+    thumbEnvironment=new PreviewEnvironment(thumbScene,thumbMap.update('studio',settings),thumbPipeline.lighting)
+    thumbEnvironment.apply(thumbContent,'studio',settings)
+    thumbContent.traverse(object=>{if(object instanceof THREE.Mesh)for(const material of Array.isArray(object.material)?object.material:[object.material])material.wireframe=false})
+    filterModelTextures(thumbContent,renderer.capabilities.getMaxAnisotropy(),false)
+    thumbPipeline.setAO(settings.ambientOcclusion);thumbPipeline.setIndirect(settings.indirectIntensity)
+    renderer.setPixelRatio(1);renderer.setSize(240,160,false);thumbPipeline.setSize(240,160,1);renderer.shadowMap.needsUpdate=true;thumbPipeline.render()
     data=renderer.domElement.toDataURL('image/png')
   } finally {
-    renderer.setPixelRatio(ratio);renderer.setSize(size.x,size.y,false);if(camera)pipeline?.setCamera(camera);pipeline?.setSize(size.x,size.y,ratio)
-    if(grid)grid.visible=!!gridVisible;if(guides)guides.visible=!!guidesVisible;if(selection)selection.visible=!!selectionVisible
+    renderer.setPixelRatio(ratio);renderer.setSize(size.x,size.y,false);renderer.shadowMap.needsUpdate=true
+    if(content)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
+    thumbEnvironment?.dispose();thumbPipeline?.dispose();thumbMap?.dispose()
   }
-  emit('thumbnail', carriageId, Uint8Array.from(atob(data.split(',')[1]!), character => character.charCodeAt(0)))
+  if(data)emit('thumbnail', carriageId, signature, Uint8Array.from(atob(data.split(',')[1]!), character => character.charCodeAt(0)))
 }
 function updateEnvironment() {
   lightingTween=undefined
@@ -316,7 +325,7 @@ function click(event: MouseEvent) {
 }
 onMounted(()=>{
   if(!host.value)return
-  scene=new THREE.Scene();scene.background=new THREE.Color(0x191b1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,5,12)
+  scene=new THREE.Scene();scene.background=new THREE.Color(0x191b1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,4,12)
   try { renderer=new THREE.WebGLRenderer({antialias:true}) } catch(cause) { emit('error',String(cause)); return }
   renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.BasicShadowMap;renderer.shadowMap.autoUpdate=false;host.value.append(renderer.domElement)
   pipeline=new PreviewRenderer(renderer,scene,camera)
@@ -328,7 +337,7 @@ onMounted(()=>{
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
   const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild()
 })
-watch(()=>JSON.stringify([props.assets,props.guides,props.thumbnailCarriageId]),()=>void rebuild())
+watch(()=>JSON.stringify([props.assets,props.guides,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
 watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],updateSelection)
 watch(()=>props.cameraView,changeCamera)
 watch(()=>props.showGrid,value=>{if(grid)grid.visible=value;if(guides)guides.visible=value})

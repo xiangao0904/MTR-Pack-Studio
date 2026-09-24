@@ -13,7 +13,11 @@ sRGB conversion. AO affects indirect diffuse/specular lighting only, leaving dir
 illumination and emission intact. Its 0.45 metre radius stays local for long consists.
 Alpha cutouts participate in the normal pass; blended surfaces, lines and sprites
 are excluded. Wireframes disable AO and local bounce. Camera switches, resizing and
-thumbnails use the same pipeline.
+thumbnails use the same pipeline. Perspective framing places the default camera
+one metre lower while keeping its aim on the model. Carriage thumbnails always
+use that default Studio view, regardless of the active preview mode or camera
+orbit. Their saved model signature includes geometry, textures, UV orientation,
+visibility and transforms, so preview-only setting changes reuse the image.
 
 Directional soft shadows use PCSS: search blockers, estimate penumbra from their
 world-space distance to the receiver and the light's angular diameter, then filter.

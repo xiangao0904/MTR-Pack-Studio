@@ -39,14 +39,15 @@ test('unrecorded edits invalidate an old redo branch', () => {
 
 test('generated metadata and property order do not add history entries', () => {
   const history = new EditorHistory({ normalize: trainHistorySnapshot })
-  const initial = { revision: 1, name: 'A', carriages: [{ id: 'a', thumbnailHash: 'old' }] }
+  const initial = { revision: 1, name: 'A', carriages: [{ id: 'a', thumbnailHash: 'old', thumbnailModelSignature: 'old-model' }] }
   history.reset(initial)
-  assert.equal(history.record({ carriages: [{ thumbnailHash: 'new', id: 'a' }], name: 'A', revision: 2 }), false)
+  assert.equal(history.record({ carriages: [{ thumbnailHash: 'new', thumbnailModelSignature: 'new-model', id: 'a' }], name: 'A', revision: 2 }), false)
   assert.equal(history.hasChanges(initial), false)
   history.record({ ...initial, name: 'B' })
   const restored = history.undo({ ...initial, name: 'B', revision: 3 })
   assert.equal(restored.revision, 0)
   assert.equal(restored.carriages[0].thumbnailHash, undefined)
+  assert.equal(restored.carriages[0].thumbnailModelSignature, undefined)
   assert.equal(initial.carriages[0].thumbnailHash, 'old')
   // Background save metadata must not clear an available redo.
   assert.equal(history.record({ ...initial, revision: 4 }), false)

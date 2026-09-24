@@ -93,10 +93,10 @@ export class EditorHistory<T> {
 /** Generated thumbnails and server revisions do not represent user edits. */
 export function trainHistorySnapshot<T extends {
   revision?: number
-  carriages?: Array<{ thumbnailHash?: string | null }>
+  carriages?: Array<{ thumbnailHash?: string | null; thumbnailModelSignature?: string | null }>
 }>(document: T): T {
   const snapshot = copy(document)
   if ('revision' in snapshot) snapshot.revision = 0
-  for (const carriage of snapshot.carriages ?? []) delete carriage.thumbnailHash
+  for (const carriage of snapshot.carriages ?? []) { delete carriage.thumbnailHash; delete carriage.thumbnailModelSignature }
   return snapshot
 }

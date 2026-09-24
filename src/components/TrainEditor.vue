@@ -12,6 +12,7 @@ import { t } from '../i18n'
 import { analyzeModelImport, chooseModelDependency, chooseModelFile, chooseTextureFile, importTextureFile, storeImageBytes, getImageAsset, getModelAsset, getTrain, importModel, updateTrain, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition, type ValidationIssue } from '../lib/projects'
 import { arrangeConsist, matchesPlacement } from '../lib/train-preview'
 import { SaveQueue } from '../lib/save-queue'
+import { carriageThumbnailSignature } from '../lib/thumbnail-signature'
 
 const props = defineProps<{ projectPath: string; entry: ContentEntry }>()
 const emit = defineEmits<{ back: []; export: []; changed: [entry: ContentEntry]; status: [value: 'saving' | 'saved' | 'failed']; error: [message: string]; ready: [] }>()
@@ -72,6 +73,8 @@ const carriage = computed(() => train.value?.carriages.find(item => item.id === 
 const layers = computed(() => carriage.value ? [...carriage.value.bodyModels, ...carriage.value.bogie1Models, ...carriage.value.bogie2Models] : [])
 const selectedLayer = computed(() => layers.value.find(item => item.id === selectedLayerId.value))
 const selectedAsset = computed(() => selectedLayer.value ? assets.value[selectedLayer.value.assetId] : undefined)
+const thumbnailModelSignature = computed(() => carriage.value && layers.value.every(layer => !!assets.value[layer.assetId]) ? carriageThumbnailSignature(carriage.value,assets.value) : undefined)
+const hasModels = (car:CarriageDefinition) => !!(car.bodyModels.length+car.bogie1Models.length+car.bogie2Models.length)
 const previewInstances = computed(() => !train.value ? [] : viewMode.value==='consist' ? arrangeConsist(train.value) : carriage.value ? [{carriage:carriage.value,index:0,z:0,reversed:false}] : [])
 const viewportAssets = computed<PreviewLayer[]>(() => previewInstances.value.flatMap(instance => {
   const car=instance.carriage; const count=previewInstances.value.length; const position=instance.index+1
@@ -100,7 +103,7 @@ async function load() {
 async function loadAssets() {
   const all=train.value?.carriages.flatMap(car=>[...car.bodyModels,...car.bogie1Models,...car.bogie2Models])||[]
   await Promise.all([...new Set(all.map(layer=>layer.assetId))].filter(id=>!assets.value[id]).map(async id=>{try{assets.value[id]=await getModelAsset(id)}catch(cause){emit('error',message(cause))}}))
-  await Promise.all((train.value?.carriages||[]).filter(car=>car.thumbnailHash&&!thumbnails.value[car.id]).map(async car=>{try{const bytes=await getImageAsset(car.thumbnailHash!);thumbnails.value[car.id]=URL.createObjectURL(new Blob([bytes],{type:'image/png'}))}catch(cause){emit('error',message(cause))}}))
+  await Promise.all((train.value?.carriages||[]).filter(car=>hasModels(car)&&car.thumbnailHash&&!thumbnails.value[car.id]).map(async car=>{try{const bytes=await getImageAsset(car.thumbnailHash!);thumbnails.value[car.id]=URL.createObjectURL(new Blob([bytes],{type:'image/png'}))}catch(cause){emit('error',message(cause))}}))
 }
 watch(train,()=>{if(!hydrating)scheduleSave()},{deep:true,flush:'sync'})
 watch(selectedCarriageId,()=>{selectedLayerId.value='';selectedPartId.value='';selectedInstanceKey.value=''},{flush:'sync'})
@@ -146,7 +149,7 @@ async function travelHistory(direction:'undo'|'redo'){
   if(!train.value||importing.value)return
   if(timer)window.clearTimeout(timer);timer=undefined
   try{await Promise.all([...thumbnailJobs]);await queue.flush();const restored=history[direction](train.value);historyTick.value++;if(!restored)return
-    restored.revision=train.value.revision;for(const car of restored.carriages)car.thumbnailHash=train.value.carriages.find(item=>item.id===car.id)?.thumbnailHash
+    restored.revision=train.value.revision;for(const car of restored.carriages){const previous=train.value.carriages.find(item=>item.id===car.id);car.thumbnailHash=hasModels(car)?previous?.thumbnailHash:undefined;car.thumbnailModelSignature=hasModels(car)?previous?.thumbnailModelSignature:undefined;if(!hasModels(car)&&thumbnails.value[car.id]){URL.revokeObjectURL(thumbnails.value[car.id]!);delete thumbnails.value[car.id]}}
     hydrating=true;train.value=restored;hydrating=false;if(!restored.carriages.some(car=>car.id===selectedCarriageId.value))selectedCarriageId.value=restored.carriages[0]?.id||''
     if(!layers.value.some(layer=>layer.id===selectedLayerId.value))selectedLayerId.value=''
     queue.markDirty();emit('status','saving');await loadAssets();await queue.flush();emit('status','saved')
@@ -163,7 +166,7 @@ function editorShortcut(event:KeyboardEvent){
 }
 function updateTags(event:Event){if(train.value)train.value.tags=(event.target as HTMLInputElement).value.split(',').map(value=>value.trim()).filter(Boolean)}
 function setPartOverride(enabled:boolean){if(!selectedLayer.value||!selectedPartId.value||!carriage.value)return;if(enabled)selectedLayer.value.partRules[selectedPartId.value]=JSON.parse(JSON.stringify(carriage.value.placement));else delete selectedLayer.value.partRules[selectedPartId.value]}
-function removeLayer(layer:ModelLayer){perform(()=>{for(const group of slotGroups.value){const index=group.layers.indexOf(layer);if(index>=0)group.layers.splice(index,1)}if(selectedLayerId.value===layer.id)selectedLayerId.value=''})}
+function removeLayer(layer:ModelLayer){perform(()=>{for(const group of slotGroups.value){const index=group.layers.indexOf(layer);if(index>=0)group.layers.splice(index,1)}if(selectedLayerId.value===layer.id)selectedLayerId.value='';const car=carriage.value;if(car&&!hasModels(car)){if(thumbnails.value[car.id]){URL.revokeObjectURL(thumbnails.value[car.id]!);delete thumbnails.value[car.id]}car.thumbnailHash=undefined;car.thumbnailModelSignature=undefined}})}
 function addModel(slot:'body'|'bogie1'|'bogie2',replace?:ModelLayer){
   operationPromise=addModelImpl(slot,replace).finally(()=>{operationPromise=undefined});return operationPromise
 }
@@ -200,8 +203,17 @@ function moveInstance(from:number,to:number){perform(()=>{if(!train.value||to<0|
 function removeInstance(){perform(()=>{train.value?.previewConsist.splice(selectedInstance.value,1);selectedInstance.value=Math.max(0,selectedInstance.value-1)})}
 function reverseInstance(){perform(()=>{const item=train.value?.previewConsist[selectedInstance.value];if(item)item.reversed=!item.reversed})}
 function dropInstance(index:number){if(dragIndex.value!==undefined)moveInstance(dragIndex.value,index);dragIndex.value=undefined}
-function onThumbnail(id:string,bytes:Uint8Array){
-  const job=(async()=>{try{const hash=await storeImageBytes(bytes);if(!alive)return;const car=train.value?.carriages.find(item=>item.id===id);if(car&&car.thumbnailHash!==hash){car.thumbnailHash=hash;if(thumbnails.value[id])URL.revokeObjectURL(thumbnails.value[id]);thumbnails.value[id]=URL.createObjectURL(new Blob([bytes.slice().buffer],{type:'image/png'}))}}catch(cause){emit('error',message(cause))}})()
+function onThumbnail(id:string,signature:string,bytes:Uint8Array){
+  const job=(async()=>{try{
+    const current=train.value?.carriages.find(item=>item.id===id)
+    if(!current||signature!==carriageThumbnailSignature(current,assets.value))return
+    const hash=await storeImageBytes(bytes)
+    if(!alive)return
+    const car=train.value?.carriages.find(item=>item.id===id)
+    if(!car||signature!==carriageThumbnailSignature(car,assets.value))return
+    if(car.thumbnailHash!==hash){car.thumbnailHash=hash;if(thumbnails.value[id])URL.revokeObjectURL(thumbnails.value[id]);thumbnails.value[id]=URL.createObjectURL(new Blob([bytes.slice().buffer],{type:'image/png'}))}
+    car.thumbnailModelSignature=signature
+  }catch(cause){emit('error',message(cause))}})()
   thumbnailJobs.add(job);void job.finally(()=>thumbnailJobs.delete(job))
 }
 function message(cause:unknown){return cause instanceof Error?cause.message:String(cause)}
@@ -229,7 +241,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
       </aside>
 
       <main :class="['editor-center',{'with-consist':showConsist}]">
-        <section class="viewport-panel"><ModelViewport ref="viewport" :assets="viewportAssets" :guides="viewportGuides" :selected-part="selectedPartId" :selected-layer="selectedLayerId" :selected-instance-key="selectedInstanceKey" :render-mode="renderMode" :settings="viewportSettings[renderMode]" :camera-view="cameraView" :show-grid="showGrid" :wireframe="wireframe" :thumbnail-carriage-id="viewMode==='single' && !simulateRules && !importing ? selectedCarriageId : undefined" @select="selection=>selectPart(selection.partId,selection.layerId,selection.carriageId,selection.instanceKey)" @clear-selection="clearSelection" @error="emit('error',$event)" @thumbnail="onThumbnail" /><div v-if="renderMode==='minecraft'" :class="['environment-caption',{'with-warning':selectedAsset?.warnings.length}]" :title="t('minecraftPreviewHint')">{{ t('minecraftScale') }}</div><div class="viewport-badge"><Box :size="14" />{{ carriage?.name }} · {{ carriage?.length }} × {{ carriage?.width }} m</div><div v-if="selectedAsset?.warnings.length" class="model-warning"><AlertTriangle :size="15" />{{ selectedAsset.warnings.join(' ') }}</div></section>
+        <section class="viewport-panel"><ModelViewport ref="viewport" :assets="viewportAssets" :guides="viewportGuides" :selected-part="selectedPartId" :selected-layer="selectedLayerId" :selected-instance-key="selectedInstanceKey" :render-mode="renderMode" :settings="viewportSettings[renderMode]" :camera-view="cameraView" :show-grid="showGrid" :wireframe="wireframe" :thumbnail-carriage-id="viewMode==='single' && !simulateRules && !importing ? selectedCarriageId : undefined" :thumbnail-model-signature="thumbnailModelSignature" :thumbnail-saved-signature="carriage?.thumbnailModelSignature" @select="selection=>selectPart(selection.partId,selection.layerId,selection.carriageId,selection.instanceKey)" @clear-selection="clearSelection" @error="emit('error',$event)" @thumbnail="onThumbnail" /><div v-if="renderMode==='minecraft'" :class="['environment-caption',{'with-warning':selectedAsset?.warnings.length}]" :title="t('minecraftPreviewHint')">{{ t('minecraftScale') }}</div><div class="viewport-badge"><Box :size="14" />{{ carriage?.name }} · {{ carriage?.length }} × {{ carriage?.width }} m</div><div v-if="selectedAsset?.warnings.length" class="model-warning"><AlertTriangle :size="15" />{{ selectedAsset.warnings.join(' ') }}</div></section>
         <section v-if="showConsist" class="consist-panel"><div class="consist-heading"><select v-model="viewMode" :aria-label="t('previewConsist')"><option value="single">{{ t('singleCarriage') }}</option><option value="consist">{{ t('previewConsist') }}</option></select><button :class="{active:simulateRules}" @click="simulateRules=!simulateRules">{{ t('simulateRules') }}</button><button @click="addInstance"><Plus :size="13" />{{ t('addSelectedCarriage') }}</button><span class="tool-spacer" /><button :disabled="!train.previewConsist[selectedInstance]" :title="t('reverseCarriage')" @click="reverseInstance"><RotateCw :size="14" /></button><button :disabled="selectedInstance===0" :title="t('moveUp')" @click="moveInstance(selectedInstance,selectedInstance-1)"><ArrowLeft :size="14" /></button><button :disabled="selectedInstance>=train.previewConsist.length-1" :title="t('moveDown')" @click="moveInstance(selectedInstance,selectedInstance+1)"><ChevronRight :size="14" /></button><button :disabled="!train.previewConsist.length" :title="t('delete')" @click="removeInstance"><Trash2 :size="14" /></button></div><TransitionGroup name="consist-order" tag="div" class="consist-items"><button v-for="(instance,index) in train.previewConsist" :key="consistKey(instance)" draggable="true" :class="{active:selectedInstance===index}" @dragstart="dragIndex=index" @dragover.prevent @drop.prevent="dropInstance(index)" @click="selectedInstance=index;selectedCarriageId=instance.carriageId"><span>{{ index+1 }}</span>{{ train.carriages.find(item=>item.id===instance.carriageId)?.name }}<span>{{ instance.reversed ? '←' : '→' }}</span></button><small v-if="!train.previewConsist.length" key="empty">{{ t('emptyConsist') }}</small></TransitionGroup></section>
         <section class="hierarchy-panel">
           <div class="hierarchy-tabs"><button :class="{active:showConsist}" @click="showConsist=!showConsist">{{ t('showConsist') }}</button><button :class="{active:treeTab==='model'}" @click="treeTab='model'">{{ t('modelTree') }}</button><button :class="{active:treeTab==='materials'}" @click="treeTab='materials'">{{ t('materials') }}</button></div>

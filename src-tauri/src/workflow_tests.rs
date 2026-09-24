@@ -126,6 +126,7 @@ fn textured_import_reopens_and_replacement_is_independent() {
     assert_eq!(asset_preview(&mut container,&asset,&[]).unwrap(),preview);
     let mut train = imported.train; train.carriages[0].body_models[0].material_bindings = bindings;
     container.index.cover_hash = Some(hash.clone()); train.carriages[0].thumbnail_hash = Some(hash.clone());
+    train.carriages[0].thumbnail_model_signature = Some("studio-thumbnail-v2".into());
     write_train_document(&mut container,0,&train).unwrap(); container.commit().unwrap(); drop(container);
     let mut reopened = Container::open(&path).unwrap();
     let restored = read_train_document(&mut reopened,0).unwrap(); assert_eq!(restored,train);
