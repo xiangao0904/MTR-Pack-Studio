@@ -91,10 +91,13 @@ fn textured_import_reopens_and_replacement_is_independent() {
 fn binary_and_ascii_fbx_have_valid_static_geometry() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ufbx");
     for name in ["blender_279_default_6100_ascii.fbx", "blender_279_default_7400_binary.fbx"] {
-        let document = model::parse(&fixtures.join(name),&BTreeMap::new()).unwrap();
+        let path = fixtures.join(name);
+        let (document, references, embedded) = model::parse_with_dependencies(&path,&BTreeMap::new()).unwrap();
         assert!(!document.parts.is_empty());
         assert!(document.parts.iter().all(|part| !part.indices.is_empty() && part.normals.len()==part.positions.len()));
         model::validate_document(&document).unwrap();
+        assert_eq!(references,model::referenced_files(&path,&BTreeMap::new()).unwrap());
+        assert!(embedded.iter().all(|(name,bytes)| !name.is_empty() && !bytes.is_empty()));
     }
 }
 

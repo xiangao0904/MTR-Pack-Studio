@@ -53,43 +53,64 @@ let pointerStart = new THREE.Vector2()
 const byteCache = new Map<string, Promise<ArrayBuffer>>()
 
 function disposeObject(root: THREE.Object3D) {
+  const geometries = new Set<THREE.BufferGeometry>()
+  const materials = new Set<THREE.Material>()
+  const textures = new Set<THREE.Texture>()
   root.traverse(object => {
     if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments || object instanceof THREE.Line) {
-      object.geometry.dispose()
+      geometries.add(object.geometry)
       for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
-        for (const value of Object.values(material)) if (value instanceof THREE.Texture) value.dispose()
-        material.dispose()
+        materials.add(material)
+        for (const value of Object.values(material)) if (value instanceof THREE.Texture) textures.add(value)
       }
     }
   })
+  geometries.forEach(geometry => geometry.dispose())
+  materials.forEach(material => material.dispose())
+  textures.forEach(texture => texture.dispose())
 }
 async function rebuild() {
   if (!scene) return
   const version = ++generation
   const group = new THREE.Group()
+  const parsed = new Map<string, Promise<THREE.Group>>()
   let complete = true
   try {
     const results = await Promise.allSettled(props.assets.map(async asset => {
       const cacheKey = JSON.stringify([asset.assetId, asset.bindings])
       if (!byteCache.has(cacheKey)) byteCache.set(cacheKey, getModelPreview(asset.assetId, asset.bindings).catch(error => { byteCache.delete(cacheKey); throw error }))
-      const gltf = await new GLTFLoader().parseAsync(await byteCache.get(cacheKey)!, '')
-      prepareMaterialTextures(gltf.scene)
+      if (!parsed.has(cacheKey)) parsed.set(cacheKey, (async () => {
+        const gltf = await new GLTFLoader().parseAsync(await byteCache.get(cacheKey)!, '')
+        prepareMaterialTextures(gltf.scene)
+        return gltf.scene
+      })())
+      const model = (await parsed.get(cacheKey)!).clone(true)
       const instance = new THREE.Group(); instance.position.z = asset.z; instance.rotation.y = asset.reversed ? Math.PI : 0
       const offset = new THREE.Group(); offset.position.z = asset.bogieOffset
-      applyTransform(gltf.scene, asset.transform)
-      gltf.scene.userData.isLayerRoot = true
-      gltf.scene.visible = asset.visible
-      const flipped = new Set<THREE.BufferGeometry>()
-      gltf.scene.traverse(object => {
+      applyTransform(model, asset.transform)
+      model.userData.isLayerRoot = true
+      model.visible = asset.visible
+      const flipped = new Map<THREE.BufferGeometry, THREE.BufferGeometry>()
+      model.traverse(object => {
         object.userData.instanceKey = asset.key; object.userData.layerId = asset.layerId; object.userData.carriageId = asset.carriageId
         if (object.userData.partId) applyTransform(object, asset.partTransforms?.[object.userData.partId])
         if (asset.hiddenParts.includes(object.userData.partId)) object.visible = false
         if (object instanceof THREE.Mesh) {
-          if (asset.flipV && !flipped.has(object.geometry)) { flipped.add(object.geometry); const uv = object.geometry.getAttribute('uv'); if (uv) { for (let index = 0; index < uv.count; index++) uv.setY(index, 1 - uv.getY(index)); uv.needsUpdate = true } }
+          if (asset.flipV) {
+            const source = object.geometry
+            const existing = flipped.get(source)
+            const geometry = existing ?? source.clone()
+            if (!existing) {
+              const uv = geometry.getAttribute('uv')
+              if (uv) { for (let index = 0; index < uv.count; index++) uv.setY(index, 1 - uv.getY(index)); uv.needsUpdate = true }
+              flipped.set(source, geometry)
+            }
+            object.geometry = geometry
+          }
           for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.wireframe = props.wireframe
         }
       })
-      offset.add(gltf.scene); instance.add(offset); group.add(instance)
+      offset.add(model); instance.add(offset); group.add(instance)
     }))
     const failure = results.find(result => result.status === 'rejected')
     if (failure?.status === 'rejected') throw failure.reason

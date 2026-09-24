@@ -153,7 +153,9 @@ export async function importModel(trainId: string, carriageId: string, slot: 'bo
     layers.push({id: crypto.randomUUID(), name: asset.name, assetId: asset.id, visible: true, flipTextureV: false, materialBindings: [], partRules: {}})
     return { train: await updateTrain(browserActivePath, train, expectedRevision ?? train.revision), asset }
   }
-  const result = await invoke<{train: TrainDefinition; asset: AssetDefinition}>('import_model', { trainId, carriageId, slot, path, dependencyOverrides, expectedRevision }); result.asset = await getModelAsset(result.asset.id); return result
+  const result = await invoke<{train: TrainDefinition; asset: AssetDefinition}>('import_model', { trainId, carriageId, slot, path, dependencyOverrides, expectedRevision })
+  result.asset.materials = await invoke<ModelMaterial[]>('get_model_materials', { assetId: result.asset.id })
+  return result
 }
 
 export async function getModelAsset(assetId: string): Promise<AssetDefinition> {

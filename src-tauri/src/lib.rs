@@ -383,20 +383,20 @@ fn import_model(state: State<AppState>, train_id: String, carriage_id: String, s
 
 fn import_model_into(container: &mut Container, train_id: &str, carriage_id: &str, slot: &str, path: &str, dependency_overrides: &std::collections::BTreeMap<String, String>, expected_revision: Option<u64>) -> Result<ModelImportResult, String> {
     let path = Path::new(path); if !path.is_file() { return Err("Choose an existing model file.".into()); }
-    let document = model::parse(path, &dependency_overrides)?;
+    let (document, referenced_files, embedded_dependencies) = model::parse_with_dependencies(path, dependency_overrides)?;
     let entry_index = train_entry_index(container, &train_id)?; let mut train = read_train_document(container, entry_index)?;
     if expected_revision.is_some_and(|revision| train.revision != revision) { return Err("This train changed during import. Retry the import.".into()); }
     let previous = container.index.clone();
     let result = (|| {
     let source = fs::read(path).map_err(|e| e.to_string())?; let source_hash = container.put_blob(&source, media_type(path))?;
     let mut dependencies = Vec::new();
-    for referenced in model::referenced_files(path, &dependency_overrides)? {
+    for referenced in referenced_files {
         let name = referenced.file_name().and_then(|value| value.to_str()).unwrap_or("dependency").to_string();
         let resolved = if referenced.exists() { referenced } else { dependency_overrides.get(&name).map(PathBuf::from).ok_or_else(|| format!("Locate the missing model dependency: {name}"))? };
         let bytes = fs::read(&resolved).map_err(|e| format!("Unable to read {name}: {e}"))?; let hash = container.put_blob(&bytes, media_type(&resolved))?;
         dependencies.push(AssetDependency { name, hash, media_type: media_type(&resolved).into() });
     }
-    for (name, bytes) in model::embedded_dependencies(path)? {
+    for (name, bytes) in embedded_dependencies {
         if dependencies.iter().any(|dependency| dependency.name.eq_ignore_ascii_case(&name)) { continue; }
         let hash = container.put_blob(&bytes, media_type(Path::new(&name)))?;
         dependencies.push(AssetDependency { name: name.clone(), hash, media_type: media_type(Path::new(&name)).into() });
@@ -453,7 +453,13 @@ fn asset_preview(container: &mut Container, asset: &AssetDefinition, bindings: &
 fn get_model_preview(state: State<AppState>, asset_id: String, material_bindings: Option<Vec<MaterialBinding>>) -> Result<tauri::ipc::Response, String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
     let asset = read_asset(&mut session.container, &asset_id)?;
-    Ok(tauri::ipc::Response::new(asset_preview(&mut session.container, &asset, &material_bindings.unwrap_or_default())?))
+    let bindings = material_bindings.unwrap_or_default();
+    let bytes = if bindings.is_empty() && !asset.preview_hash.is_empty() {
+        session.container.read_blob(&asset.preview_hash)?
+    } else {
+        asset_preview(&mut session.container, &asset, &bindings)?
+    };
+    Ok(tauri::ipc::Response::new(bytes))
 }
 #[tauri::command]
 fn get_model_materials(state: State<AppState>, asset_id: String) -> Result<Vec<model::ModelMaterial>, String> {

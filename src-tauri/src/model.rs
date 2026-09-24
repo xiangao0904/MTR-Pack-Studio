@@ -1,7 +1,7 @@
 use crate::material::{AlphaMode, MaterialProperties, TextureChannel};
 use crate::domain::{slugify, ModelFormat, ModelPartSummary};
 use serde::{Deserialize, Serialize};
-use std::{collections::{BTreeMap, BTreeSet}, fs, io::BufReader, path::{Path, PathBuf}};
+use std::{collections::{BTreeMap, BTreeSet}, fs, io::{BufRead, BufReader}, path::{Path, PathBuf}};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,17 +52,31 @@ pub fn model_format(path: &Path) -> Result<ModelFormat, String> {
 pub fn analyze(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ImportAnalysis, String> {
     let format = model_format(path)?;
     let missing_dependencies: Vec<String> = referenced_files(path, overrides)?.into_iter().filter(|item| !item.exists()).map(|item| item.to_string_lossy().into_owned()).collect();
-    if !missing_dependencies.is_empty() { return Ok(ImportAnalysis { format, missing_dependencies, parts: Vec::new(), warnings: Vec::new() }); }
-    let document = parse(path, overrides)?;
-    Ok(ImportAnalysis { format, missing_dependencies, parts: summaries(&document), warnings: document.warnings })
+    // The import dialog only needs missing files. Geometry is parsed once during import.
+    Ok(ImportAnalysis { format, missing_dependencies, parts: Vec::new(), warnings: Vec::new() })
 }
 
 pub fn parse(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
-    let mut document = match model_format(path)? {
+    let document = match model_format(path)? {
         ModelFormat::Obj => parse_obj(path, overrides)?,
         ModelFormat::Fbx => parse_fbx(path, overrides)?,
         ModelFormat::Mqo => parse_mqo(path, overrides)?,
     };
+    finish_document(document)
+}
+
+pub fn parse_with_dependencies(path: &Path, overrides: &BTreeMap<String, String>) -> Result<(ModelDocument, Vec<PathBuf>, Vec<(String, Vec<u8>)>), String> {
+    if model_format(path)? != ModelFormat::Fbx {
+        return Ok((parse(path, overrides)?, referenced_files(path, overrides)?, Vec::new()));
+    }
+    let scene = load_fbx(path)?;
+    let document = finish_document(parse_fbx_scene(&scene, overrides)?)?;
+    let references = referenced_fbx(path, overrides, &scene);
+    let embedded = embedded_fbx(&scene);
+    Ok((document, references, embedded))
+}
+
+fn finish_document(mut document: ModelDocument) -> Result<ModelDocument, String> {
     let mut ids = BTreeSet::new();
     for (index, part) in document.parts.iter_mut().enumerate() {
         if !ids.insert(part.id.clone()) { part.id = format!("{}-{index}", part.id); ids.insert(part.id.clone()); }
@@ -82,11 +96,13 @@ pub fn summaries(document: &ModelDocument) -> Vec<ModelPartSummary> {
 
 pub fn referenced_files(path: &Path, overrides: &BTreeMap<String, String>) -> Result<Vec<PathBuf>, String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let text = fs::read_to_string(path).unwrap_or_default();
     let mut files = BTreeSet::new();
     match model_format(path)? {
         ModelFormat::Obj => {
-            for line in text.lines().map(str::trim) {
+            let source = BufReader::new(fs::File::open(path).map_err(|e| format!("Unable to read OBJ: {e}"))?);
+            for line in source.lines() {
+                let line = line.map_err(|e| format!("Unable to read OBJ: {e}"))?;
+                let line = line.trim();
                 if let Some(name) = line.strip_prefix("mtllib ") {
                     let requested = name.trim(); let key = Path::new(requested).file_name().and_then(|value|value.to_str()).unwrap_or(requested); let mtl = overrides.get(key).map(PathBuf::from).unwrap_or_else(||parent.join(requested)); files.insert(mtl.clone());
                     if let Ok(mtl_text) = fs::read_to_string(&mtl) {
@@ -98,31 +114,34 @@ pub fn referenced_files(path: &Path, overrides: &BTreeMap<String, String>) -> Re
             }
         }
         ModelFormat::Mqo => {
+            let text = fs::read_to_string(path).map_err(|e| format!("Unable to read MQO: {e}"))?;
             for capture in quoted_values_after(&text, "tex(") { let key=Path::new(&capture).file_name().and_then(|value|value.to_str()).unwrap_or(&capture);files.insert(overrides.get(key).map(PathBuf::from).unwrap_or_else(||parent.join(capture))); }
         }
         ModelFormat::Fbx => {
             let scene = load_fbx(path)?;
-            for texture in scene.textures.iter() {
-                if !texture.content.is_empty() { continue; }
-                let requested = if texture.relative_filename.is_empty() { texture.filename.to_string() } else { texture.relative_filename.to_string() };
-                if requested.is_empty() { continue; }
-                let key = Path::new(&requested).file_name().and_then(|value| value.to_str()).unwrap_or(&requested);
-                files.insert(overrides.get(key).map(PathBuf::from).unwrap_or_else(|| parent.join(requested)));
-            }
+            return Ok(referenced_fbx(path, overrides, &scene));
         }
     }
     Ok(files.into_iter().collect())
 }
 
-pub fn embedded_dependencies(path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
-    if model_format(path)? != ModelFormat::Fbx { return Ok(Vec::new()); }
-    let scene = load_fbx(path)?;
-    Ok(scene.textures.iter().filter_map(|texture| {
+fn referenced_fbx(path: &Path, overrides: &BTreeMap<String, String>, scene: &ufbx::SceneRoot) -> Vec<PathBuf> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    scene.textures.iter().filter(|texture| texture.content.is_empty()).filter_map(|texture| {
+        let requested = if texture.relative_filename.is_empty() { texture.filename.to_string() } else { texture.relative_filename.to_string() };
+        if requested.is_empty() { return None; }
+        let key = Path::new(&requested).file_name().and_then(|value| value.to_str()).unwrap_or(&requested);
+        Some(overrides.get(key).map(PathBuf::from).unwrap_or_else(|| parent.join(requested)))
+    }).collect::<BTreeSet<_>>().into_iter().collect()
+}
+
+fn embedded_fbx(scene: &ufbx::SceneRoot) -> Vec<(String, Vec<u8>)> {
+    scene.textures.iter().filter_map(|texture| {
         if texture.content.is_empty() { return None; }
         let source = if texture.relative_filename.is_empty() { texture.filename.to_string() } else { texture.relative_filename.to_string() };
         let name = Path::new(&source).file_name()?.to_str()?.to_string();
         Some((name, texture.content.to_vec()))
-    }).collect())
+    }).collect()
 }
 
 fn parse_obj(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
@@ -171,6 +190,10 @@ fn load_fbx(path: &Path) -> Result<ufbx::SceneRoot, String> {
 
 fn parse_fbx(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
     let scene = load_fbx(path)?;
+    parse_fbx_scene(&scene, overrides)
+}
+
+fn parse_fbx_scene(scene: &ufbx::SceneRoot, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
     let mut warnings = Vec::new();
     if !scene.skin_deformers.is_empty() { warnings.push("Skinning was detected. The imported preview uses the static mesh pose.".into()); }
     if !scene.blend_deformers.is_empty() { warnings.push("Morph targets were detected and skipped.".into()); }
@@ -355,5 +378,14 @@ mod tests {
         let root=std::env::temp_dir().join(format!("mtr-model-{}",uuid::Uuid::new_v4()));std::fs::create_dir_all(&root).unwrap();
         let obj=root.join("test.obj");std::fs::write(&obj,"o shell\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();let parsed=parse(&obj,&BTreeMap::new()).unwrap();assert_eq!(parsed.parts[0].indices.len(),3);
         let mqo=root.join("test.mqo");std::fs::write(&mqo,"Metasequoia Document\nFormat Text Ver 1.0\nObject \"shell\" {\n vertex 3 {\n0 0 0\n1 0 0\n0 1 0\n}\n face 1 {\n3 V(0 1 2)\n}\n}\nEof\n").unwrap();let parsed=parse(&mqo,&BTreeMap::new()).unwrap();assert_eq!(parsed.parts[0].indices.len(),3);std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test] fn dependency_analysis_does_not_parse_geometry() {
+        let root=std::env::temp_dir().join(format!("mtr-analysis-{}",uuid::Uuid::new_v4()));std::fs::create_dir_all(&root).unwrap();
+        let obj=root.join("broken.obj");std::fs::write(&obj,"mtllib missing.mtl\nf 1 2 3\n").unwrap();
+        let analysis=analyze(&obj,&BTreeMap::new()).unwrap();
+        assert_eq!(analysis.missing_dependencies,vec![root.join("missing.mtl").to_string_lossy().to_string()]);
+        assert!(analysis.parts.is_empty());
+        assert!(parse(&obj,&BTreeMap::new()).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
