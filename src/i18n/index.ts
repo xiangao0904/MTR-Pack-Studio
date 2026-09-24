@@ -13,7 +13,7 @@ const en = {
   settings: 'Settings', help: 'Help', settingsLater: 'Settings are coming in a future release.', helpLater: 'Help is coming in a future release.',
   workspaceEyebrow: 'YOUR CREATIVE WORKSPACE', libraryEyebrow: 'YOUR LIBRARY', recentEyebrow: 'PICK UP WHERE YOU LEFT OFF', packEyebrow: 'MTR RESOURCE PACK PROJECT',
   gridView: 'Grid view', listView: 'List view', more: 'More options', trySearch: 'Try another name or path.', today: 'Today',
-  productTagline: 'Build · Design · For MTRmod', productSubline: 'For a richer railway in Minecraft.', footerCredit: 'Create More Possibilities · With MTRmod',
+  productTagline: 'Build · Design · For MTRmod',
   newPlaceholder: 'My Train Pack', projectFile: 'Project file',
   projectFileHint: 'D:\\MTR Packs\\Urban Rail Collection.mtrpack', projectFileHelp: 'Choose where to save the project file.',
   browse: 'Browse',

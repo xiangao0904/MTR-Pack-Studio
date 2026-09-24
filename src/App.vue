@@ -133,7 +133,7 @@ function dateLabel(timestamp: number) {
         <div class="nav-rule"></div>
         <button :class="['nav-item', { selected: page === 'recent' }]" @click="page = 'recent'"><Clock3 :size="22" />{{ t('recentProjects') }}</button>
         <button :class="['nav-item', { selected: page === 'all' }]" @click="page = 'all'"><List :size="22" />{{ t('allProjects') }}</button>
-      </nav><div class="sidebar-bottom"><img class="train-watermark" src="/images/sidebar-train.svg" alt="" aria-hidden="true" /><strong>MTR Pack Studio</strong><span>{{ t('productSubline') }}</span><small>v0.1.0 &nbsp; Beta</small></div></aside>
+      </nav><div class="sidebar-bottom"><img class="train-watermark" src="/images/sidebar-train.svg" alt="" aria-hidden="true" /><strong>MTR Pack Studio</strong><small>v0.1.0 &nbsp; Beta</small></div></aside>
       <main class="main-panel"><div class="hero-image"></div><div class="main-scroll">
         <section v-if="page === 'home'" class="welcome"><span class="eyebrow">{{ t('workspaceEyebrow') }}</span><h1>{{ t('welcome') }}</h1><p>{{ t('subtitle') }}</p><div class="quick-actions">
           <button class="quick-card primary" @click="creating = true"><Plus :size="36" /><span><strong>{{ t('newProject') }}</strong><small>{{ t('newHint') }}</small></span><ArrowRight class="quick-arrow" :size="21" /></button>
@@ -143,7 +143,7 @@ function dateLabel(timestamp: number) {
           <div v-if="filteredProjects.length" :class="['project-collection', view]"><div v-if="view === 'list'" class="list-header"><span>{{ t('name') }}</span><span>{{ t('lastOpened') }}</span><span>{{ t('location') }}</span></div><div v-for="project in filteredProjects" :key="project.path" class="project-row" @click="reopenProject(project)"><div class="project-identity"><div class="project-thumb"><ProjectArtwork :path="project.path" :revision="project.lastOpened" /></div><div><strong>{{ project.name }}</strong><small>{{ t('pack') }}</small></div></div><span class="project-date">{{ dateLabel(project.lastOpened) }}</span><span class="project-path" :title="displayPath(project.path)">{{ displayPath(project.path) }}</span><div class="row-menu"><button :aria-label="t('more')" @click.stop="menuFor = menuFor === project.path ? null : project.path"><MoreHorizontal :size="20" /></button><div v-if="menuFor === project.path" class="menu-popover"><button @click.stop="forgetProject(project.path)">{{ t('remove') }}</button></div></div></div></div>
           <div v-else class="empty-projects"><FolderOpen :size="36" :stroke-width="1.4" /><strong>{{ query ? t('noMatches') : t('empty') }}</strong><span>{{ query ? t('trySearch') : t('emptyHint') }}</span></div>
         </section><button class="drop-zone" @click="chooseProject"><Folder :size="31" /><span><strong>{{ t('drop') }}</strong><small>{{ t('dropHint') }}</small></span></button>
-      </div><footer class="statusbar"><span><Info :size="17" />{{ t('tip') }}</span><span>✦ &nbsp; {{ t('footerCredit') }}</span></footer></main>
+      </div><footer class="statusbar"><span><Info :size="17" />{{ t('tip') }}</span></footer></main>
     </div>
     <ProjectWorkspace v-else ref="workspace" :key="activeProject.path" :project="activeProject" @back="returnHome" @editor-context="editorContext=$event" />
     </Transition>
