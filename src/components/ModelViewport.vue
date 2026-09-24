@@ -145,10 +145,13 @@ function rebuildGuides() {
   if (guides) { scene.remove(guides); disposeObject(guides) }
   guides = new THREE.Group()
   for (const guide of props.guides) {
-    const shape = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-guide.width/2, .015, -guide.length/2), new THREE.Vector3(guide.width/2,.015,-guide.length/2), new THREE.Vector3(guide.width/2,.015,guide.length/2), new THREE.Vector3(-guide.width/2,.015,guide.length/2)])
-    const outline = new THREE.LineLoop(shape,new THREE.LineBasicMaterial({color:0x6b8293})); outline.position.z=guide.z; guides.add(outline)
+    const width=Math.max(.1,guide.width),length=Math.max(.1,guide.length)
+    const plane=new THREE.Mesh(new THREE.PlaneGeometry(width,length),new THREE.MeshStandardMaterial({color:0x3f9fd4,emissive:0x3f9fd4,emissiveIntensity:.3,roughness:1,metalness:0,transparent:true,opacity:.14,side:THREE.DoubleSide,depthWrite:false}))
+    plane.rotation.x=-Math.PI/2;plane.position.set(0,.012,guide.z);guides.add(plane)
+    const shape=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-width/2,.018,-length/2),new THREE.Vector3(width/2,.018,-length/2),new THREE.Vector3(width/2,.018,length/2),new THREE.Vector3(-width/2,.018,length/2)])
+    const outline=new THREE.LineLoop(shape,new THREE.LineBasicMaterial({color:0x78c7ef}));outline.position.z=guide.z;guides.add(outline)
   }
-  guides.visible = props.showGrid; scene.add(guides)
+  scene.add(guides)
 }
 function contentBounds() {
   content?.updateWorldMatrix(true, true)
@@ -337,10 +340,11 @@ onMounted(()=>{
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
   const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild()
 })
-watch(()=>JSON.stringify([props.assets,props.guides,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
+watch(()=>JSON.stringify([props.assets,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
+watch(()=>JSON.stringify(props.guides),rebuildGuides)
 watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],updateSelection)
 watch(()=>props.cameraView,changeCamera)
-watch(()=>props.showGrid,value=>{if(grid)grid.visible=value;if(guides)guides.visible=value})
+watch(()=>props.showGrid,value=>{if(grid)grid.visible=value})
 watch(()=>props.wireframe,updateWireframe)
 watch(()=>props.settings,updateViewportSettings,{deep:true})
 watch(()=>props.renderMode,()=>{const from=environment?.lightingMood();updateEnvironment();const to=environment?.lightingMood();if(from&&to&&!reducedMotion()){lightingTween={start:performance.now(),from,to};environment?.blendLighting(from,to,0);modeTransitionKey.value++}updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})

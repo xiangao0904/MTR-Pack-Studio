@@ -7,6 +7,7 @@
 - The viewport selects parts and controls the camera. It does not offer Move, Rotate, or Scale editing. Existing project transforms remain readable and exportable.
 - Undo (`Ctrl+Z`) and Redo (`Ctrl+Shift+Z` or `Ctrl+Y`) include document and visibility changes. Text fields retain normal text editing shortcuts. History is scoped to the current editor session; saves preserve revision checks.
 - Choose Perspective, Front, Back, Left, Right, or Top. Grid and Wireframe are view settings. Fit View (`F`) frames the current carriage or consist.
+- The translucent blue footprint marks each carriage's configured length and width in every render mode. It updates as those dimensions change and remains visible when Grid is off.
 - Open the Consist panel to arrange repeated or reversed carriages and simulate placement rules.
 
 ## Render modes
