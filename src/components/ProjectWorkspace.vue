@@ -135,7 +135,11 @@ async function persistCover() {
 }
 function coverSelected(event: Event) { const file = (event.target as HTMLInputElement).files?.[0]; if (file) void changeCover(file) }
 function saveShortcut(event: KeyboardEvent) {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void flushSave().catch(() => {}) }
+  if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 's') {
+    event.preventDefault()
+    if (event.repeat) return
+    void flushSave().then(() => { notice.value = t('projectSaved') }).catch(() => {})
+  }
 }
 
 async function submitTrain() {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, Minus, MoreHorizontal, Plus, Search, Settings2, Square, X } from '@lucide/vue'
+import { ArrowRight, Clock3, Folder, FolderOpen, Grid2X2, HelpCircle, Home, Info, List, Minus, MoreHorizontal, Plus, Save, Search, Settings2, Square, X } from '@lucide/vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen } from '@tauri-apps/api/event'
 import { t } from './i18n'
@@ -56,6 +56,7 @@ onMounted(async () => {
 })
 async function refreshProjects() { try { projects.value = await loadRecentProjects() } catch (error) { showError(error) } }
 async function flushWorkspace() { if (workspace.value) await workspace.value.flush(); else await saveProject() }
+async function saveNow() { try { await flushWorkspace(); notice.value = t('projectSaved') } catch (error) { showError(error) } }
 function showError(error: unknown) { notice.value = error instanceof Error ? error.message : String(error) }
 const isDesktop = '__TAURI_INTERNALS__' in window
 async function windowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
@@ -121,7 +122,7 @@ function dateLabel(timestamp: number) {
     <header :class="['titlebar',{'workspace-titlebar':activeProject}]" @mousedown="dragTitlebar">
       <div class="brand-mark">M</div><div class="brand-copy"><div class="brand-name">MTR Pack Studio <span class="beta">Beta</span></div><div class="brand-tagline">{{ t('productTagline') }}</div></div>
       <nav v-if="activeProject" class="editor-breadcrumbs"><button @click="returnHome">{{ t('home') }}</button><span>/</span><button @click="workspace?.overview()">{{ activeProject?.name }}</button><template v-if="editing"><span>/</span><strong>{{ editorContext.name }}</strong></template></nav><span v-if="activeProject" :class="['editor-save',editorContext.status]">{{ editorContext.status==='saving'?t('saving'):editorContext.status==='failed'?t('saveFailed'):t('saved') }}</span>
-      <div class="titlebar-actions"><button class="utility-action" @click="notice = t('settingsLater')"><Settings2 :size="19" />{{ t('settings') }}</button><button class="utility-action" @click="notice = t('helpLater')"><HelpCircle :size="19" />{{ t('help') }}</button><span class="titlebar-divider" aria-hidden="true"></span><button class="window-control" :aria-label="t('minimize')" :title="t('minimize')" @click="windowAction('minimize')"><Minus :size="19" /></button><button class="window-control" :aria-label="t('maximize')" :title="t('maximize')" @click="windowAction('toggleMaximize')"><Square :size="16" /></button><button class="window-control close-control" :aria-label="t('close')" :title="t('close')" @click="windowAction('close')"><X :size="20" /></button></div>
+      <div class="titlebar-actions"><button v-if="activeProject" class="utility-action" :title="t('saveProjectShortcut')" @click="saveNow"><Save :size="19" />{{ t('saveProject') }}</button><button class="utility-action" @click="notice = t('settingsLater')"><Settings2 :size="19" />{{ t('settings') }}</button><button class="utility-action" @click="notice = t('helpLater')"><HelpCircle :size="19" />{{ t('help') }}</button><span class="titlebar-divider" aria-hidden="true"></span><button class="window-control" :aria-label="t('minimize')" :title="t('minimize')" @click="windowAction('minimize')"><Minus :size="19" /></button><button class="window-control" :aria-label="t('maximize')" :title="t('maximize')" @click="windowAction('toggleMaximize')"><Square :size="16" /></button><button class="window-control close-control" :aria-label="t('close')" :title="t('close')" @click="windowAction('close')"><X :size="20" /></button></div>
     </header>
     <div v-if="!activeProject" class="body-shell">
       <aside class="sidebar"><nav aria-label="Main navigation">

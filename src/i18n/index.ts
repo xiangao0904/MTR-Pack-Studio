@@ -31,7 +31,7 @@ const en = {
   projectSettingsHint: 'Manage your project image, namespace and description.', trainEditorHint: 'The train editor is coming in a future release.',
   trainsHeading: 'Trains', allContentHeading: 'All content',
   contentGroup: 'Content', projectGroup: 'Project', projectLabel: 'PROJECT', itemName: 'NAME', itemType: 'TYPE', itemLastEdited: 'LAST EDITED', retry: 'Retry',
-  saving: 'Saving…', saved: 'Saved', saveFailed: 'Save failed', recoveredProject: 'The latest incomplete save was skipped. The project was recovered from its last valid checkpoint.',
+  saving: 'Saving…', saved: 'Saved', saveFailed: 'Save failed', saveProject: 'Save', saveProjectShortcut: 'Save project (Ctrl+S)', projectSaved: 'Project saved.', recoveredProject: 'The latest incomplete save was skipped. The project was recovered from its last valid checkpoint.',
   general: 'General', carriages: 'Carriages', models: 'Models & Textures', placement: 'Placement Rules', mtr3Compatibility: 'MTR 3 Compatibility',
   exportId: 'Export ID', description: 'Description', color: 'Color', tags: 'Tags', length: 'Length', width: 'Width', bogie1: 'Bogie 1', bogie2: 'Bogie 2',
   endConnections: 'End connections', end1Gangway: 'End 1 gangway', end2Gangway: 'End 2 gangway', end1Barrier: 'End 1 barrier', end2Barrier: 'End 2 barrier',
