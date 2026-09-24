@@ -7,7 +7,7 @@ export type { PreviewRenderMode } from './viewport-settings.ts'
 
 type MeshState = {material: THREE.Material | THREE.Material[]; castShadow: boolean; receiveShadow: boolean}
 const GROUND_Y = -.02
-const MINECRAFT_GROUND_Y = GROUND_Y - 1
+const PREVIEW_GROUND_Y = GROUND_Y - 1
 const corners = (box: THREE.Box3) => [0,1,2,3,4,5,6,7].map(index => new THREE.Vector3(index&1 ? box.max.x : box.min.x,index&2 ? box.max.y : box.min.y,index&4 ? box.max.z : box.min.z))
 function visible(object: THREE.Object3D): boolean { return object.visible && (!object.parent || visible(object.parent)) }
 
@@ -110,7 +110,7 @@ export class PreviewEnvironment {
   private lightDirection() { return previewLightDirection(this.settings) }
   private fitShadow(light: THREE.DirectionalLight,direction: THREE.Vector3) {
     const points=corners(this.bounds)
-    const groundY=this.mode==='minecraft'?MINECRAFT_GROUND_Y:GROUND_Y
+    const groundY=this.mode==='minecraft'||(this.mode==='material'&&this.settings.ground)?PREVIEW_GROUND_Y:GROUND_Y
     for(const point of [...points]) {const distance=Math.max(0,(point.y-groundY)/direction.y);points.push(point.clone().addScaledVector(direction,-distance))}
     this.scenery.updateWorldMatrix(true,true);light.shadow.updateMatrices(light)
     const local=new THREE.Box3().setFromPoints(points.map(point=>point.applyMatrix4(light.shadow.camera.matrixWorldInverse)))
@@ -130,7 +130,7 @@ export class PreviewEnvironment {
   private createNeutralGround(center:THREE.Vector3,size:number) {
     const geometry=new THREE.PlaneGeometry(size,size);this.geometry.add(geometry)
     const ground=new THREE.Mesh(geometry,this.registerMaterial(new THREE.MeshStandardMaterial({color:0x777e86,roughness:.94,metalness:0})))
-    ground.rotation.x=-Math.PI/2;ground.position.set(Math.round(center.x),GROUND_Y,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
+    ground.rotation.x=-Math.PI/2;ground.position.set(Math.round(center.x),PREVIEW_GROUND_Y,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
   }
   private pixelTexture(kind:'grass'|'side'|'dirt') {
     const data=new Uint8Array(16*16*4)
@@ -144,7 +144,7 @@ export class PreviewEnvironment {
       const make=(map:THREE.Texture)=>this.registerMaterial(new THREE.MeshStandardMaterial({map,roughness:1,metalness:0}))
       const geometry=new THREE.BoxGeometry(size,1,size);this.geometry.add(geometry)
       const ground=new THREE.Mesh(geometry,[make(side),make(side),make(top),make(bottom),make(side),make(side)])
-      ground.position.set(Math.round(center.x),MINECRAFT_GROUND_Y-.5,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
+      ground.position.set(Math.round(center.x),PREVIEW_GROUND_Y-.5,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
     }
 
     // Vanilla-style flat voxel clouds: one instanced draw instead of many cloud meshes.

@@ -112,9 +112,10 @@ and frame cost** checks cache reuse, visible weather changes and WebGL errors, a
 reports a 720 x 480 batch timing including GPU readback. This synthetic fixture is
 not a minimum-hardware performance certification.
 
-The Minecraft grass block's top is 1.02 metres below model Y=0. The extra 0.02
-metres prevents z-fighting; the model and its exported coordinates are unchanged.
-Shadow fitting projects onto that lower plane so vehicle shadows still fit.
+The Minecraft grass block's top and Material Preview's optional floor are 1.02
+metres below model Y=0. The extra 0.02 metres prevents z-fighting; the model and
+its exported coordinates are unchanged. Shadow fitting projects onto each floor
+when present so vehicle shadows still fit.
 
 Preview controls now update the existing sun, fog, cloud instances, environment
 intensity and screen-space effect strengths in place. Dragging a slider does not

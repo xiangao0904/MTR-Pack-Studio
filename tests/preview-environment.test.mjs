@@ -80,7 +80,16 @@ test('only material mode has an optional floor; studio stays empty and Minecraft
   const groundCount=()=>{let count=0;f.scene.traverse(object=>{if(object instanceof THREE.Mesh&&object!==f.mesh&&object.receiveShadow)count++});return count}
   f.environment.apply(f.root,'studio',{...defaultViewportSettings('studio'),ground:true});assert.equal(groundCount(),0)
   f.environment.apply(f.root,'material',{...defaultViewportSettings('material'),ground:false});assert.equal(groundCount(),0)
-  f.environment.apply(f.root,'material',{...defaultViewportSettings('material'),ground:true});assert.equal(groundCount(),1)
+  f.environment.apply(f.root,'material',{...defaultViewportSettings('material'),ground:true,lightElevation:10});assert.equal(groundCount(),1)
+  let ground,light
+  f.scene.traverse(object=>{if(object instanceof THREE.Mesh&&object.geometry instanceof THREE.PlaneGeometry)ground=object;if(object instanceof THREE.DirectionalLight)light=object})
+  assert.ok(ground);assert.equal(ground.position.y,-1.02)
+  const direction=light.position.clone().sub(light.target.position).normalize(),bounds=new THREE.Box3().setFromObject(f.root),camera=light.shadow.camera
+  camera.updateMatrixWorld(true)
+  for(const x of [bounds.min.x,bounds.max.x])for(const y of [bounds.min.y,bounds.max.y])for(const z of [bounds.min.z,bounds.max.z]) {
+    const point=new THREE.Vector3(x,y,z).addScaledVector(direction,-(y-ground.position.y)/direction.y).project(camera)
+    assert.ok(Math.abs(point.x)<=1.001&&Math.abs(point.y)<=1.001&&Math.abs(point.z)<=1.001)
+  }
   f.environment.apply(f.root,'minecraft',{...defaultViewportSettings('minecraft'),ground:false});assert.equal(groundCount(),1)
   f.dispose()
 })
