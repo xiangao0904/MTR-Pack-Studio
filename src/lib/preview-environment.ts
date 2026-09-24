@@ -7,6 +7,7 @@ export type { PreviewRenderMode } from './viewport-settings.ts'
 
 type MeshState = {material: THREE.Material | THREE.Material[]; castShadow: boolean; receiveShadow: boolean}
 const GROUND_Y = -.02
+const MINECRAFT_GROUND_Y = GROUND_Y - 1
 const corners = (box: THREE.Box3) => [0,1,2,3,4,5,6,7].map(index => new THREE.Vector3(index&1 ? box.max.x : box.min.x,index&2 ? box.max.y : box.min.y,index&4 ? box.max.z : box.min.z))
 function visible(object: THREE.Object3D): boolean { return object.visible && (!object.parent || visible(object.parent)) }
 
@@ -22,6 +23,8 @@ export class PreviewEnvironment {
   private geometry = new Set<THREE.BufferGeometry>()
   private lights: THREE.DirectionalLight[] = []
   private bounds = new THREE.Box3()
+  private mode: PreviewRenderMode = 'studio'
+  private clouds?: THREE.InstancedMesh
   private settings = normalizeViewportSettings('studio',undefined)
   private lighting: PreviewLighting
   constructor(scene: THREE.Scene, environmentMap?: THREE.Texture, lighting = createPreviewLighting()) { this.scene=scene;this.environmentMap=environmentMap;this.lighting=lighting;scene.add(this.scenery) }
@@ -35,13 +38,14 @@ export class PreviewEnvironment {
     this.materials.clear();this.textures.clear()
   }
   private clearScenery() {
+    if(this.clouds && !this.clouds.parent)this.clouds.dispose()
     for (const light of this.lights) light.shadow.dispose()
     this.lights=[]
     for (const geometry of this.geometry) geometry.dispose()
-    this.geometry.clear();this.scenery.traverse(object=>{if(object instanceof THREE.InstancedMesh)object.dispose()});this.scenery.clear()
+    this.geometry.clear();this.scenery.traverse(object=>{if(object instanceof THREE.InstancedMesh)object.dispose()});this.scenery.clear();this.clouds=undefined
   }
   apply(root: THREE.Object3D | undefined, mode: PreviewRenderMode, settings?: ViewportSettings) {
-    this.restoreMaterials();this.clearScenery();this.settings=normalizeViewportSettings(mode,settings)
+    this.restoreMaterials();this.clearScenery();this.mode=mode;this.settings=normalizeViewportSettings(mode,settings)
     this.bounds.makeEmpty();root?.updateWorldMatrix(true,true)
     root?.traverse(object=>{if(object instanceof THREE.Mesh && visible(object)) {if(!object.geometry.boundingBox)object.geometry.computeBoundingBox();if(object.geometry.boundingBox)this.bounds.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld))}})
     if(this.bounds.isEmpty())this.bounds.set(new THREE.Vector3(-1,0,-1),new THREE.Vector3(1,2,1))
@@ -67,13 +71,50 @@ export class PreviewEnvironment {
       object.castShadow=true;object.receiveShadow=true
     })
   }
+  /** Update uniforms, lights and existing scenery without touching source model materials. */
+  updateSettings(mode: PreviewRenderMode, settings: ViewportSettings) {
+    if (mode !== this.mode || (mode === 'material' && settings.ground !== this.settings.ground) || !this.lights.length) return false
+    const previous=this.settings
+    this.settings=normalizeViewportSettings(mode,settings)
+    this.scene.environmentIntensity=this.settings.environmentIntensity
+    const light=this.lights[0]!
+    light.intensity=this.settings.lightIntensity
+    light.color.copy(mode==='minecraft'?minecraftAtmosphere(this.settings).sun:new THREE.Color(0xffffff))
+    if (previous.shadowQuality !== this.settings.shadowQuality) light.shadow.mapSize.setScalar(this.settings.shadowQuality==='high'?4096:2048)
+    if (previous.lightAzimuth !== this.settings.lightAzimuth || previous.lightElevation !== this.settings.lightElevation || previous.lightSize !== this.settings.lightSize || previous.shadowQuality !== this.settings.shadowQuality) {
+      const center=this.bounds.getCenter(new THREE.Vector3()),extent=this.bounds.getSize(new THREE.Vector3()),direction=this.lightDirection()
+      light.position.copy(center).addScaledVector(direction,Math.max(30,extent.length()*2))
+      light.target.position.copy(center)
+      this.fitShadow(light,direction)
+      const camera=light.shadow.camera
+      this.lighting.previewShadowExtent.value.set(camera.right-camera.left,camera.top-camera.bottom,camera.far-camera.near)
+      this.lighting.previewLightRadius.value=penumbraRadius(1,this.settings.lightSize)
+      light.shadow.needsUpdate=true
+    }
+    if (mode==='minecraft') {
+      const extent=this.bounds.getSize(new THREE.Vector3())
+      const size=Math.max(512,Math.ceil(Math.max(extent.x,extent.z))*2)
+      if(this.scene.fog instanceof THREE.Fog) {
+        this.scene.fog.color.copy(minecraftAtmosphere(this.settings).horizon)
+        this.scene.fog.near=size*(.25-this.settings.skyHaze*.13)
+        this.scene.fog.far=size*(.85-this.settings.skyHaze*.25)
+      }
+      if(previous.cloudCover!==this.settings.cloudCover)this.updateClouds(this.bounds.getCenter(new THREE.Vector3()))
+    }
+    return true
+  }
+  refreshEnvironment() {
+    this.scene.environment=this.environmentMap??null
+    if(this.mode==='minecraft' && this.skyBackground)this.scene.background=this.skyBackground
+  }
   private lightDirection() { return previewLightDirection(this.settings) }
   private fitShadow(light: THREE.DirectionalLight,direction: THREE.Vector3) {
     const points=corners(this.bounds)
-    for(const point of [...points]) {const distance=Math.max(0,(point.y-GROUND_Y)/direction.y);points.push(point.clone().addScaledVector(direction,-distance))}
+    const groundY=this.mode==='minecraft'?MINECRAFT_GROUND_Y:GROUND_Y
+    for(const point of [...points]) {const distance=Math.max(0,(point.y-groundY)/direction.y);points.push(point.clone().addScaledVector(direction,-distance))}
     this.scenery.updateWorldMatrix(true,true);light.shadow.updateMatrices(light)
     const local=new THREE.Box3().setFromPoints(points.map(point=>point.applyMatrix4(light.shadow.camera.matrixWorldInverse)))
-    const softnessMargin=penumbraRadius(Math.max(0,this.bounds.max.y-GROUND_Y)/direction.y,this.settings.lightSize)
+    const softnessMargin=penumbraRadius(Math.max(0,this.bounds.max.y-groundY)/direction.y,this.settings.lightSize)
     const margin=Math.max(.5,this.bounds.getSize(new THREE.Vector3()).length()*.02)+softnessMargin,camera=light.shadow.camera
     camera.left=local.min.x-margin;camera.right=local.max.x+margin;camera.bottom=local.min.y-margin;camera.top=local.max.y+margin
     camera.near=Math.max(.1,-local.max.z-margin);camera.far=Math.max(camera.near+1,-local.min.z+margin);camera.updateProjectionMatrix()
@@ -103,24 +144,33 @@ export class PreviewEnvironment {
       const make=(map:THREE.Texture)=>this.registerMaterial(new THREE.MeshStandardMaterial({map,roughness:1,metalness:0}))
       const geometry=new THREE.BoxGeometry(size,1,size);this.geometry.add(geometry)
       const ground=new THREE.Mesh(geometry,[make(side),make(side),make(top),make(bottom),make(side),make(side)])
-      ground.position.set(Math.round(center.x),GROUND_Y-.5,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
+      ground.position.set(Math.round(center.x),MINECRAFT_GROUND_Y-.5,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
     }
 
     // Vanilla-style flat voxel clouds: one instanced draw instead of many cloud meshes.
+    this.updateClouds(center)
+  }
+  private updateClouds(center: THREE.Vector3) {
     const cells: [number,number][]=[]
     for(let z=-12;z<=12;z++)for(let x=-12;x<=12;x++) {
       const cluster=((Math.floor((x+12)/3)*37+Math.floor((z+12)/3)*71)%101)/100
       const detail=((x+17)*29+(z+17)*43)%17/17
       if(cluster*.8+detail*.2 < this.settings.cloudCover*.78)cells.push([x,z])
     }
-    if(cells.length) {
+    if(cells.length && !this.clouds) {
       const geometry=new THREE.BoxGeometry(16,3,16);this.geometry.add(geometry)
       const material=this.registerMaterial(new THREE.MeshStandardMaterial({color:0xf7fbff,roughness:1,fog:true}))
-      const clouds=new THREE.InstancedMesh(geometry,material,cells.length),matrix=new THREE.Matrix4()
-      cells.forEach(([x,z],index)=>{matrix.makeTranslation(center.x+x*16,48,center.z+z*16);clouds.setMatrixAt(index,matrix)})
-      clouds.name='Minecraft block clouds';clouds.instanceMatrix.needsUpdate=true;clouds.computeBoundingSphere();this.scenery.add(clouds)
+      this.clouds=new THREE.InstancedMesh(geometry,material,625)
+      this.clouds.name='Minecraft block clouds';this.scenery.add(this.clouds)
     }
-
+    if(this.clouds) {
+      this.clouds.count=cells.length
+      const matrix=new THREE.Matrix4()
+      cells.forEach(([x,z],index)=>{matrix.makeTranslation(center.x+x*16,48,center.z+z*16);this.clouds!.setMatrixAt(index,matrix)})
+      this.clouds.instanceMatrix.needsUpdate=true;this.clouds.computeBoundingSphere()
+      if(cells.length) {if(!this.clouds.parent)this.scenery.add(this.clouds)}
+      else this.scenery.remove(this.clouds)
+    }
   }
   dispose() {this.restoreMaterials();this.clearScenery();this.scene.remove(this.scenery);this.scene.fog=null;if(this.scene.environment===this.environmentMap)this.scene.environment=null;if(this.scene.background===this.skyBackground)this.scene.background=null}
 }

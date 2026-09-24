@@ -37,8 +37,12 @@ export class PreviewEnvironmentMap {
   private backgroundTexture?: THREE.Texture
   get background() { return this.backgroundTexture }
   constructor(renderer: THREE.WebGLRenderer) { this.renderer = renderer; this.generator = new THREE.PMREMGenerator(renderer) }
+  needsUpdate(mode: PreviewRenderMode, settings: ViewportSettings) { return this.signature !== this.key(mode,settings) }
+  private key(mode: PreviewRenderMode, settings: ViewportSettings) {
+    return `${mode}-${settings.lightAzimuth}-${settings.lightElevation}` + (mode === 'minecraft' ? `-${settings.cloudCover}-${settings.skyHaze}-${settings.lightSize}` : '')
+  }
   update(mode: PreviewRenderMode, settings: ViewportSettings) {
-    const signature = `${mode}-${settings.lightAzimuth}-${settings.lightElevation}` + (mode === 'minecraft' ? `-${settings.cloudCover}-${settings.skyHaze}-${settings.lightSize}` : '')
+    const signature = this.key(mode,settings)
     if (signature !== this.signature) {
       const source = mode === 'minecraft' ? this.sky.bake(this.renderer, settings, previewLightDirection(settings)) : createEnvironmentTexture(mode, settings)
       const next = this.generator.fromEquirectangular(source)

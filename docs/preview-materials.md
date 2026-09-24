@@ -111,3 +111,14 @@ The regression page includes daylight, low-sun and dense-cloud views. **Check sk
 and frame cost** checks cache reuse, visible weather changes and WebGL errors, and
 reports a 720 x 480 batch timing including GPU readback. This synthetic fixture is
 not a minimum-hardware performance certification.
+
+The Minecraft grass block's top is 1.02 metres below model Y=0. The extra 0.02
+metres prevents z-fighting; the model and its exported coordinates are unchanged.
+Shadow fitting projects onto that lower plane so vehicle shadows still fit.
+
+Preview controls now update the existing sun, fog, cloud instances, environment
+intensity and screen-space effect strengths in place. Dragging a slider does not
+dispose model materials, recreate the ground or reparse GLB. The expensive HDR sky,
+background cubemap and PMREM rebuild 120 ms after sky parameters stop changing;
+intermediate light and fog values appear immediately. A mode switch or model rebuild
+still performs a complete setup. The last slider value is always used for the sky.

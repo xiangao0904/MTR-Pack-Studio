@@ -42,7 +42,7 @@ test('Minecraft ground remains one metre per tile and cleans scenery and shadow 
   f.scene.traverse(object=>{if(object instanceof THREE.Mesh&&Array.isArray(object.material)&&object.material.length===6)ground=object;if(object instanceof THREE.DirectionalLight)light=object})
   assert.ok(ground);const {width,height,depth}=ground.geometry.parameters
   assert.ok(width>=1800);assert.equal(width,depth);assert.equal(width/ground.material[2].map.repeat.x,1);assert.equal(depth/ground.material[2].map.repeat.y,1)
-  assert.ok(Math.abs(ground.position.y+height/2+.02)<1e-12);assert.equal(ground.position.z,300);assert.equal(ground.receiveShadow,true)
+  assert.ok(Math.abs(ground.position.y+height/2+1.02)<1e-12);assert.equal(ground.position.z,300);assert.equal(ground.receiveShadow,true)
   assert.ok(ground.material[2] instanceof THREE.MeshStandardMaterial)
   let geometryDisposed=0,textureDisposed=0,shadowDisposed=0
   ground.geometry.addEventListener('dispose',()=>geometryDisposed++);ground.material[2].map.addEventListener('dispose',()=>textureDisposed++)
@@ -61,7 +61,7 @@ test('sun and light agree and shadow frustum includes model plus low-angle groun
   const camera=light.shadow.camera;camera.updateMatrixWorld(true)
   const bounds=new THREE.Box3().setFromObject(f.root)
   const points=[bounds.min.clone(),bounds.max.clone(),new THREE.Vector3(bounds.min.x,bounds.max.y,bounds.max.z),new THREE.Vector3(bounds.max.x,bounds.max.y,bounds.min.z)]
-  for(const point of [...points])points.push(point.clone().addScaledVector(direction,-(point.y+.02)/direction.y))
+  for(const point of [...points])points.push(point.clone().addScaledVector(direction,-(point.y+1.02)/direction.y))
   for(const point of points){const projected=point.clone().project(camera);assert.ok(Math.abs(projected.x)<=1.001&&Math.abs(projected.y)<=1.001&&Math.abs(projected.z)<=1.001)}
   assert.equal(f.scene.children.flatMap(group=>group.children).filter(object=>object instanceof THREE.Mesh&&object.receiveShadow).length,2)
   f.dispose()
@@ -96,4 +96,29 @@ test('Minecraft keeps block clouds in one instanced draw and disposes instance b
   f.environment.apply(f.root,'minecraft',{...settings,cloudCover:0})
   assert.equal(disposed,1);assert.equal(f.scene.getObjectByName('Minecraft block clouds'),undefined)
   f.dispose()
+})
+
+test('slider updates keep model materials, ground, clouds and shadow targets alive',()=>{
+  const f=fixture(), initial=defaultViewportSettings('minecraft')
+  f.environment.apply(f.root,'minecraft',initial)
+  const material=f.mesh.material,clouds=f.scene.getObjectByName('Minecraft block clouds')
+  let ground,light
+  f.scene.traverse(object=>{if(object instanceof THREE.Mesh&&Array.isArray(object.material)&&object.material.length===6)ground=object;if(object instanceof THREE.DirectionalLight)light=object})
+  const shadowMap=new THREE.WebGLRenderTarget(8,8);light.shadow.map=shadowMap
+  const position=light.position.clone(),fog=f.scene.fog
+  let disposed=0
+  material[0].addEventListener('dispose',()=>disposed++)
+  shadowMap.addEventListener('dispose',()=>disposed++)
+  const changed={...initial,lightAzimuth:210,lightElevation:20,lightIntensity:4,lightSize:6,environmentIntensity:1.2,indirectIntensity:.5,skyHaze:.6,cloudCover:.9}
+  assert.equal(f.environment.updateSettings('minecraft',changed),true)
+  assert.equal(f.mesh.material,material);assert.equal(f.scene.getObjectByName('Minecraft block clouds'),clouds)
+  assert.equal(f.scene.fog,fog);assert.equal(f.scene.environmentIntensity,1.2)
+  assert.equal(light.intensity,4);assert.ok(light.position.distanceTo(position)>1)
+  assert.equal(light.shadow.map,shadowMap);assert.equal(disposed,0)
+  assert.equal(clouds.count>0,true)
+  const revisedGround=f.scene.children.flatMap(group=>group.children).find(object=>object===ground)
+  assert.equal(revisedGround,ground)
+  f.environment.updateSettings('minecraft',{...changed,cloudCover:0})
+  assert.equal(f.scene.getObjectByName('Minecraft block clouds'),undefined)
+  f.environment.dispose();f.dispose()
 })

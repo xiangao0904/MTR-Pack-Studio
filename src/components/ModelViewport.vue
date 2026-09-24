@@ -34,6 +34,8 @@ let scene: THREE.Scene | undefined
 let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined
 let environment: PreviewEnvironment | undefined
 let environmentMap: PreviewEnvironmentMap | undefined
+let skyTimer: number | undefined
+let activeSettings: ViewportSettings | undefined
 let selectedObject: THREE.Object3D | undefined
 let orthoHeight = 20
 let perspectivePose: {position: THREE.Vector3; target: THREE.Vector3; zoom: number} | undefined
@@ -215,14 +217,37 @@ function captureThumbnail(carriageId: string) {
   emit('thumbnail', carriageId, Uint8Array.from(atob(data.split(',')[1]!), character => character.charCodeAt(0)))
 }
 function updateEnvironment() {
+  if(skyTimer!==undefined) {clearTimeout(skyTimer);skyTimer=undefined}
   pipeline?.clearMaterials()
   const settings = normalizeViewportSettings(props.renderMode, props.settings)
+  activeSettings=settings
   if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings), environmentMap.background)
   environment?.apply(content, props.renderMode, settings)
   pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity)
   if(content && renderer)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe)
   if (renderer) { renderer.shadowMap.enabled = true; renderer.shadowMap.needsUpdate = true }
+}
+function updateViewportSettings() {
+  if(!renderer || !environment || !environmentMap) return
+  const settings=normalizeViewportSettings(props.renderMode,props.settings)
+  if(!environment.updateSettings(props.renderMode,settings)) {updateEnvironment();return}
+  const previous=activeSettings
+  activeSettings=settings
+  if(previous?.pixelTextures!==settings.pixelTextures && content)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),settings.pixelTextures)
+  pipeline?.setAO(settings.ambientOcclusion && !props.wireframe)
+  pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity)
+  if(!previous || previous.lightAzimuth!==settings.lightAzimuth || previous.lightElevation!==settings.lightElevation || previous.lightSize!==settings.lightSize || previous.shadowQuality!==settings.shadowQuality)renderer.shadowMap.needsUpdate=true
+  if(environmentMap.needsUpdate(props.renderMode,settings)) {
+    if(skyTimer!==undefined)clearTimeout(skyTimer)
+    skyTimer=window.setTimeout(()=>{
+      skyTimer=undefined
+      if(disposed || !environment || !environmentMap)return
+      const latest=normalizeViewportSettings(props.renderMode,props.settings)
+      environment.setEnvironmentMap(environmentMap.update(props.renderMode,latest),environmentMap.background)
+      environment.refreshEnvironment()
+    },120)
+  }
 }
 function updateWireframe() { pipeline?.setIndirect(props.wireframe ? 0 : normalizeViewportSettings(props.renderMode, props.settings).indirectIntensity); pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;content?.traverse(object => { if(object instanceof THREE.Mesh)for(const material of Array.isArray(object.material)?object.material:[object.material])material.wireframe=props.wireframe }) }
 function updateSelection() {
@@ -278,9 +303,9 @@ watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],upd
 watch(()=>props.cameraView,changeCamera)
 watch(()=>props.showGrid,value=>{if(grid)grid.visible=value;if(guides)guides.visible=value})
 watch(()=>props.wireframe,updateWireframe)
-watch(()=>props.settings,()=>{updateEnvironment();updateWireframe()},{deep:true})
+watch(()=>props.settings,updateViewportSettings,{deep:true})
 watch(()=>props.renderMode,()=>{updateEnvironment();updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})
-onBeforeUnmount(()=>{disposed=true;generation++;cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.dispose();renderer?.domElement.remove()})
+onBeforeUnmount(()=>{disposed=true;generation++;if(skyTimer!==undefined)clearTimeout(skyTimer);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.dispose();renderer?.domElement.remove()})
 defineExpose({fitView:frameContent})
 </script>
 <template><div ref="host" class="model-viewport"><svg class="orientation" viewBox="-45 -45 90 90" aria-hidden="true"><g v-for="axis in orientationAxes" :key="axis.name" :stroke="axis.color" :fill="axis.color"><line x1="0" y1="0" :x2="axis.x" :y2="axis.y" stroke-width="1.6"/><text :x="axis.x * 1.3" :y="axis.y * 1.3 + 4" text-anchor="middle" stroke="none">{{ axis.name }}</text></g></svg><div v-if="!assets.length" class="viewport-empty">{{ t('previewEmpty') }}</div></div></template>
