@@ -15,7 +15,7 @@ export interface PreviewTransform { translation: [number, number, number]; rotat
 export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
 export interface PreviewGuide { key: string; length: number; width: number; z: number; reversed: boolean }
 const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; thumbnailCarriageId?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, renderMode: 'studio' })
-const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; error: [message: string]; thumbnail: [carriageId: string, bytes: Uint8Array] }>()
+const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, bytes: Uint8Array] }>()
 const host = ref<HTMLDivElement>()
 const orientationAxes = ref([{name:'X',color:'#ed777c',x:28,y:0},{name:'Y',color:'#87dca3',x:0,y:-28},{name:'Z',color:'#80b6f1',x:-20,y:18}])
 const lastOrientation = new THREE.Quaternion(0,0,0,0)
@@ -286,6 +286,7 @@ function click(event: MouseEvent) {
   const bounds=renderer.domElement.getBoundingClientRect();const pointer=new THREE.Vector2((event.clientX-bounds.left)/bounds.width*2-1,-(event.clientY-bounds.top)/bounds.height*2+1)
   const raycaster=new THREE.Raycaster();raycaster.setFromCamera(pointer,camera)
   let current:THREE.Object3D|null|undefined=raycaster.intersectObject(content,true).find(hit=>isVisible(hit.object))?.object
+  if(!current){emit('clearSelection');return}
   while(current&&!current.userData.partId)current=current.parent
   if(current?.userData.partId)emit('select',{partId:current.userData.partId,layerId:current.userData.layerId,carriageId:current.userData.carriageId,instanceKey:current.userData.instanceKey})
 }
