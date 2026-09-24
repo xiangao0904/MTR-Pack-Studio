@@ -14,7 +14,7 @@ The exporters target MTR 4.0.5 on Minecraft 1.20.4 and MTR 3 with Nemo's Transit
 
 ## Coordinate, texture and placement contract
 
-Canonical geometry uses metres with +X pointing left. OBJ and MQO export undo the X reflection and restore the appropriate face winding; MQO also converts metres to centimetres. Canonical UVs preserve imported values. Preview GLB converts V to `1 - V`. MTR 4 uses `flipTextureV` with the same baseline, and MTR 3 bakes that conversion in the emitted OBJ. The editor's per-layer V toggle reverses this conversion in each path.
+Canonical geometry uses metres with +X pointing left. OBJ and MQO export undo the X reflection and restore the appropriate face winding; MQO also converts metres to centimetres. Canonical UVs preserve imported values. Metasequoia OBJ files use a top-left UV origin, so their preview GLB keeps V unchanged; other imports use `1 - V`. MTR 4's `flipTextureV` and MTR 3's baked UV conversion follow the same per-asset baseline. The editor's per-layer V toggle reverses that baseline in each path. Existing Metasequoia assets with stored previews from earlier versions are corrected when displayed, and export resolves the source UV origin without requiring reimport.
 
 JPEG, WebP and PNG texture bytes are decoded and encoded as real PNG files. Replacement material bindings resolve directly to container blob hashes. Material colors multiply texture pixels once, with neutral exported MTL/MQO material colors. Solid colors use generated PNGs. Textures are addressed by their encoded content hash, allowing repeated resources and solid colors to share one ZIP entry.
 

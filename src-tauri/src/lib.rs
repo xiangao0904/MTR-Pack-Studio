@@ -403,7 +403,7 @@ fn import_model_into(container: &mut Container, train_id: &str, carriage_id: &st
     }
     let document_hash = container.put_blob(&rmp_serde::to_vec_named(&document).map_err(|e| e.to_string())?, "application/vnd.mtrpack.model+msgpack")?;
     let preview_hash = String::new(); let asset_id = Uuid::new_v4().to_string();
-    let mut asset = AssetDefinition { id: asset_id.clone(), name: path.file_stem().and_then(|value| value.to_str()).unwrap_or("Model").into(), source_format: model::model_format(path)?, source_hash, document_hash, preview_hash, dependencies, parts: model::summaries(&document), warnings: document.warnings.clone() };
+    let mut asset = AssetDefinition { id: asset_id.clone(), name: path.file_stem().and_then(|value| value.to_str()).unwrap_or("Model").into(), source_format: model::model_format(path)?, source_hash, document_hash, preview_hash, dependencies, parts: model::summaries(&document), warnings: document.warnings.clone(), legacy_uv_correction: false };
     let preview = asset_preview(container, &asset, &[])?;
     asset.preview_hash = container.put_blob(&preview, "model/gltf-binary")?;
     let asset_hash = container.put_blob(&serde_json::to_vec(&asset).map_err(|e| e.to_string())?, "application/vnd.mtrpack.asset+json")?; container.index.assets.insert(asset_id.clone(), asset_hash);
@@ -418,10 +418,19 @@ fn import_model_into(container: &mut Container, train_id: &str, carriage_id: &st
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_model_asset(state: State<AppState>, asset_id: String) -> Result<AssetDefinition, String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or_else(|| "No project is open.".to_string())?;
-    read_asset(&mut session.container, &asset_id)
+    let mut asset = read_asset(&mut session.container, &asset_id)?;
+    asset.legacy_uv_correction = legacy_uv_correction(&mut session.container, &asset)?;
+    Ok(asset)
+}
+
+fn legacy_uv_correction(container: &mut Container, asset: &AssetDefinition) -> Result<bool, String> {
+    if asset.source_format != domain::ModelFormat::Obj { return Ok(false); }
+    let document: model::ModelDocument = rmp_serde::from_slice(&container.read_blob(&asset.document_hash)?).map_err(|e| e.to_string())?;
+    if document.uv_origin_top_left { return Ok(false); }
+    Ok(model::is_metasequoia_obj(&container.read_blob(&asset.source_hash)?))
 }
 
 fn asset_preview(container: &mut Container, asset: &AssetDefinition, bindings: &[MaterialBinding]) -> Result<Vec<u8>, String> {

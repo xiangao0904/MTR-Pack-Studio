@@ -9,6 +9,16 @@ pub struct ModelDocument {
     pub parts: Vec<ModelPart>,
     pub materials: Vec<ModelMaterial>,
     pub warnings: Vec<String>,
+    #[serde(default)] pub uv_origin_top_left: bool,
+}
+
+impl ModelDocument {
+    pub fn default_flip_v(&self) -> bool { !self.uv_origin_top_left }
+    pub fn flip_v(&self, layer_flip_v: bool) -> bool { self.default_flip_v() ^ layer_flip_v }
+}
+
+pub fn is_metasequoia_obj(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"# Created by Metasequoia")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +158,7 @@ fn parse_obj(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
     let options = tobj::LoadOptions { triangulate: true, single_index: true, ..Default::default() };
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut source = BufReader::new(fs::File::open(path).map_err(|e| format!("Unable to read OBJ: {e}"))?);
+    let uv_origin_top_left = is_metasequoia_obj(source.fill_buf().map_err(|e| format!("Unable to read OBJ: {e}"))?);
     let (models, materials) = tobj::load_obj_buf(&mut source, &options, |material_path| {
         let name = material_path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
         let resolved = overrides.get(name).map(PathBuf::from).unwrap_or_else(|| parent.join(material_path));
@@ -180,7 +191,7 @@ fn parse_obj(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
             indices: mesh.indices.chunks_exact(3).flat_map(|v| [v[0], v[2], v[1]]).collect(), material: mesh.material_id,
         }
     }).collect();
-    Ok(ModelDocument { parts, materials, warnings: Vec::new() })
+    Ok(ModelDocument { parts, materials, warnings: Vec::new(), uv_origin_top_left })
 }
 
 fn load_fbx(path: &Path) -> Result<ufbx::SceneRoot, String> {
@@ -250,7 +261,7 @@ fn parse_fbx_scene(scene: &ufbx::SceneRoot, overrides: &BTreeMap<String, String>
         parts.extend(groups.into_values().filter(|part| !part.indices.is_empty()));
     }
     if parts.is_empty() { return Err("The FBX file contains no static mesh geometry.".into()); }
-    Ok(ModelDocument { parts, materials, warnings })
+    Ok(ModelDocument { parts, materials, warnings, uv_origin_top_left: false })
 }
 
 fn parse_mqo(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelDocument, String> {
@@ -295,7 +306,7 @@ fn parse_mqo(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
         parts.extend(groups.into_values()); cursor=close+1;
     }
     if parts.is_empty() { return Err("The MQO file contains no model objects.".into()); }
-    Ok(ModelDocument { parts, materials, warnings: Vec::new() })
+    Ok(ModelDocument { parts, materials, warnings: Vec::new(), uv_origin_top_left: false })
 }
 
 #[cfg(test)]
@@ -308,7 +319,7 @@ pub fn to_glb_with_textures(document: &ModelDocument, image_bytes: &BTreeMap<Str
         let position_view = append_f32_vec3(&mut binary, &part.positions, &mut views); let (min, max) = bounds(&part.positions);
         let position_accessor = accessors.len(); accessors.push(serde_json::json!({"bufferView":position_view,"componentType":5126,"count":part.positions.len(),"type":"VEC3","min":min,"max":max}));
         let normal_accessor = if part.normals.len() == part.positions.len() { let view = append_f32_vec3(&mut binary, &part.normals, &mut views); let value=accessors.len(); accessors.push(serde_json::json!({"bufferView":view,"componentType":5126,"count":part.normals.len(),"type":"VEC3"})); Some(value) } else { None };
-        let uv_accessor = if part.texcoords.len() == part.positions.len() { let preview_uv: Vec<_> = part.texcoords.iter().map(|uv| [uv[0], 1.0 - uv[1]]).collect(); let view=append_f32_vec2(&mut binary,&preview_uv,&mut views); let value=accessors.len(); accessors.push(serde_json::json!({"bufferView":view,"componentType":5126,"count":part.texcoords.len(),"type":"VEC2"})); Some(value) } else { None };
+        let uv_accessor = if part.texcoords.len() == part.positions.len() { let preview_uv: Vec<_> = part.texcoords.iter().map(|uv| [uv[0], if document.default_flip_v() { 1.0 - uv[1] } else { uv[1] }]).collect(); let view=append_f32_vec2(&mut binary,&preview_uv,&mut views); let value=accessors.len(); accessors.push(serde_json::json!({"bufferView":view,"componentType":5126,"count":part.texcoords.len(),"type":"VEC2"})); Some(value) } else { None };
         let index_view = append_u32(&mut binary, &part.indices, &mut views); let index_accessor=accessors.len(); accessors.push(serde_json::json!({"bufferView":index_view,"componentType":5125,"count":part.indices.len(),"type":"SCALAR"}));
         let mut attributes=serde_json::Map::new(); attributes.insert("POSITION".into(), position_accessor.into()); if let Some(v)=normal_accessor { attributes.insert("NORMAL".into(),v.into()); } if let Some(v)=uv_accessor { attributes.insert("TEXCOORD_0".into(),v.into()); }
         let mut primitive=serde_json::Map::new(); primitive.insert("attributes".into(),attributes.into()); primitive.insert("indices".into(),index_accessor.into()); if let Some(material)=part.material.filter(|v| *v<document.materials.len()){primitive.insert("material".into(),material.into());}
@@ -373,7 +384,7 @@ fn find_matching_brace(value:&str,open:usize)->Option<usize>{let mut depth=0;for
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn glb_has_valid_header() { let doc=ModelDocument{parts:vec![ModelPart{id:"part".into(),name:"Part".into(),positions:vec![[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0]],normals:vec![],texcoords:vec![],indices:vec![0,1,2],material:None}],materials:vec![],warnings:vec![]};let glb=to_glb(&doc).unwrap();assert_eq!(&glb[..4],b"glTF");assert_eq!(u32::from_le_bytes(glb[8..12].try_into().unwrap())as usize,glb.len()); }
+    #[test] fn glb_has_valid_header() { let doc=ModelDocument{parts:vec![ModelPart{id:"part".into(),name:"Part".into(),positions:vec![[0.0,0.0,0.0],[1.0,0.0,0.0],[0.0,1.0,0.0]],normals:vec![],texcoords:vec![],indices:vec![0,1,2],material:None}],materials:vec![],warnings:vec![],uv_origin_top_left:false};let glb=to_glb(&doc).unwrap();assert_eq!(&glb[..4],b"glTF");assert_eq!(u32::from_le_bytes(glb[8..12].try_into().unwrap())as usize,glb.len()); }
     #[test] fn parses_obj_and_mqo_triangles() {
         let root=std::env::temp_dir().join(format!("mtr-model-{}",uuid::Uuid::new_v4()));std::fs::create_dir_all(&root).unwrap();
         let obj=root.join("test.obj");std::fs::write(&obj,"o shell\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();let parsed=parse(&obj,&BTreeMap::new()).unwrap();assert_eq!(parsed.parts[0].indices.len(),3);

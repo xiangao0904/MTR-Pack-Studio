@@ -76,9 +76,12 @@ fn load_asset(
         .ok_or_else(|| format!("Model asset {id} is missing."))?;
     let asset: AssetDefinition =
         serde_json::from_slice(&container.read_blob(&asset_hash)?).map_err(|e| e.to_string())?;
-    let document: ModelDocument =
+    let mut document: ModelDocument =
         rmp_serde::from_slice(&container.read_blob(&asset.document_hash)?)
             .map_err(|e| e.to_string())?;
+    if !document.uv_origin_top_left && asset.source_format == crate::domain::ModelFormat::Obj {
+        document.uv_origin_top_left = crate::model::is_metasequoia_obj(&container.read_blob(&asset.source_hash)?);
+    }
     Ok((asset, document))
 }
 
@@ -585,6 +588,7 @@ fn write_mtr4_layers(
                     properties: Default::default(),
                 }],
                 warnings: Vec::new(),
+                uv_origin_top_left: document.uv_origin_top_left,
             };
             let extension = if format == "mqo" { "mqo" } else { "obj" };
             let model_path = format!("assets/{namespace}/models/vehicle/{suffix}.{extension}");
@@ -608,7 +612,7 @@ fn write_mtr4_layers(
             files.insert(properties, pretty(&mtr4_properties(&filtered))?);
             let positions = format!("assets/{namespace}/properties/definition/{suffix}.json");
             files.insert(positions,pretty(&json!({"positionDefinitions":[{"name":"origin","positions":[{"x":0,"y":0,"z":0}],"positionsFlipped":[]}]}))?);
-            output.push(json!({"modelResource":format!("{namespace}:models/vehicle/{suffix}.{extension}"),"textureResource":texture_resource,"modelPropertiesResource":format!("{namespace}:properties/vehicle/{suffix}.json"),"positionDefinitionsResource":format!("{namespace}:properties/definition/{suffix}.json"),"flipTextureV":!layer.flip_texture_v}));
+            output.push(json!({"modelResource":format!("{namespace}:models/vehicle/{suffix}.{extension}"),"textureResource":texture_resource,"modelPropertiesResource":format!("{namespace}:properties/vehicle/{suffix}.json"),"positionDefinitionsResource":format!("{namespace}:properties/definition/{suffix}.json"),"flipTextureV":document.flip_v(layer.flip_texture_v)}));
         }
     }
     Ok(output)
@@ -668,12 +672,13 @@ fn build_mtr3(
                             files,
                         )?);
                     }
+                    let flip_v = document.flip_v(layer.flip_texture_v);
                     for part in &mut document.parts {
                         part.material = part.material.map(|index| index + offset);
                         for position in &mut part.positions {
                             position[2] += z_offset;
                         }
-                        if !layer.flip_texture_v {
+                        if flip_v {
                             for uv in &mut part.texcoords {
                                 uv[1] = 1.0 - uv[1];
                             }
@@ -698,6 +703,7 @@ fn build_mtr3(
                 parts: combined_parts,
                 materials: combined_materials,
                 warnings: Vec::new(),
+                uv_origin_top_left: false,
             };
             files.insert(
                 format!("assets/{namespace}/models/vehicle/{base}.obj"),
@@ -1200,6 +1206,7 @@ mod tests {
             }],
             materials: vec![],
             warnings: vec![],
+            uv_origin_top_left: false,
         }
     }
     #[test]
@@ -1388,6 +1395,7 @@ mod tests {
             dependencies: vec![],
             parts: vec![],
             warnings: vec![],
+            legacy_uv_correction: false,
         };
         let asset_hash = container
             .put_blob(
@@ -1519,6 +1527,7 @@ mod tests {
                 }],
                 parts: vec![],
                 warnings: vec![],
+                legacy_uv_correction: false,
             };
             let hash = container
                 .put_blob(

@@ -73,7 +73,7 @@ const previewInstances = computed(() => !train.value ? [] : viewMode.value==='co
 const viewportAssets = computed<PreviewLayer[]>(() => previewInstances.value.flatMap(instance => {
   const car=instance.carriage; const count=previewInstances.value.length; const position=instance.index+1
   return ([{models:car.bodyModels,offset:0},{models:car.bogie1Models,offset:car.bogie1Position},{models:car.bogie2Models,offset:car.bogie2Position}]).flatMap(group=>group.models.map(layer=>({
-    key:`${instance.index}:${layer.id}`,assetId:layer.assetId,layerId:layer.id,carriageId:car.id,visible:layer.visible,z:instance.z,reversed:instance.reversed,bogieOffset:group.offset,flipV:layer.flipTextureV,bindings:layer.materialBindings,
+    key:`${instance.index}:${layer.id}`,assetId:layer.assetId,layerId:layer.id,carriageId:car.id,visible:layer.visible,z:instance.z,reversed:instance.reversed,bogieOffset:group.offset,flipV:layer.flipTextureV,legacyUvCorrection:assets.value[layer.assetId]?.legacyUvCorrection,bindings:layer.materialBindings,
     transform: layer.transform, partTransforms: layer.partTransforms,
     hiddenParts:[...(layer.hiddenParts || []), ...(simulateRules.value ? (assets.value[layer.assetId]?.parts||[]).filter(part=>!matchesPlacement(layer.partRules[part.id]||car.placement,position,count)).map(part=>part.id) : [])],
   })))

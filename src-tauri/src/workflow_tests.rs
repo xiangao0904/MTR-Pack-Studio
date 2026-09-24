@@ -16,6 +16,49 @@ fn valid_png_bytes_are_reused_without_reencoding() {
 }
 
 #[test]
+fn metasequoia_obj_uvs_keep_their_top_left_origin_in_preview() {
+    let root=std::env::temp_dir().join(format!("mtr-uv-origin-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
+    let path=root.join("model.obj");
+    let geometry="v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0.25 0.1\nvt 0.75 0.1\nvt 0.25 0.9\nf 1/1 2/2 3/3\n";
+    let preview_v=|document:&model::ModelDocument| {
+        let glb=model::to_glb(document).unwrap();let json=glb_json(&glb);
+        let accessor=json["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_0"].as_u64().unwrap() as usize;
+        let view=json["accessors"][accessor]["bufferView"].as_u64().unwrap() as usize;
+        let offset=json["bufferViews"][view]["byteOffset"].as_u64().unwrap() as usize;
+        let start=28+u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize+offset+4;
+        f32::from_le_bytes(glb[start..start+4].try_into().unwrap())
+    };
+    fs::write(&path,format!("# Created by Metasequoia\n{geometry}")).unwrap();
+    let top_left=model::parse(&path,&BTreeMap::new()).unwrap();
+    assert!(top_left.uv_origin_top_left);
+    assert!((preview_v(&top_left)-0.1).abs()<1e-6);
+    assert!(!top_left.flip_v(false));assert!(top_left.flip_v(true));
+    fs::write(&path,geometry).unwrap();
+    let conventional=model::parse(&path,&BTreeMap::new()).unwrap();
+    assert!(!conventional.uv_origin_top_left);
+    assert!((preview_v(&conventional)-0.9).abs()<1e-6);
+    assert!(conventional.flip_v(false));assert!(!conventional.flip_v(true));
+    let mut legacy=serde_json::to_value(&conventional).unwrap();legacy.as_object_mut().unwrap().remove("uvOriginTopLeft");
+    assert!(!serde_json::from_value::<model::ModelDocument>(legacy).unwrap().uv_origin_top_left);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn existing_metasequoia_assets_get_uv_correction_without_reimport() {
+    let root=std::env::temp_dir().join(format!("mtr-legacy-uv-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
+    let mut container=Container::create(&root.join("legacy.mtrpack"),"Legacy").unwrap();
+    let source_hash=container.put_blob(b"# Created by Metasequoia\nv 0 0 0\n","model/obj").unwrap();
+    let document=model::ModelDocument {parts:vec![],materials:vec![],warnings:vec![],uv_origin_top_left:false};
+    let document_hash=container.put_blob(&rmp_serde::to_vec_named(&document).unwrap(),"application/vnd.mtrpack.model+msgpack").unwrap();
+    let asset=AssetDefinition{id:"legacy".into(),name:"Legacy".into(),source_format:domain::ModelFormat::Obj,source_hash,document_hash,preview_hash:String::new(),dependencies:vec![],parts:vec![],warnings:vec![],legacy_uv_correction:false};
+    assert!(legacy_uv_correction(&mut container,&asset).unwrap());
+    let mut current=document;current.uv_origin_top_left=true;
+    let mut current_asset=asset.clone();current_asset.document_hash=container.put_blob(&rmp_serde::to_vec_named(&current).unwrap(),"application/vnd.mtrpack.model+msgpack").unwrap();
+    assert!(!legacy_uv_correction(&mut container,&current_asset).unwrap());
+    drop(container);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn pbr_import_bindings_and_images_survive_reopen_and_glb_conversion() {
     use crate::material::{AlphaMode, MaterialProperties, TextureChannel};
     let root=std::env::temp_dir().join(format!("mtr-pbr-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();

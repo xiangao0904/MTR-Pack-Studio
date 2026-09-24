@@ -12,7 +12,7 @@ import { getModelPreview, type MaterialBinding } from '../lib/projects'
 import { t } from '../i18n'
 
 export interface PreviewTransform { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }
-export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
+export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
 export interface PreviewGuide { key: string; length: number; width: number; z: number; reversed: boolean }
 const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; thumbnailCarriageId?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, renderMode: 'studio' })
 const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; error: [message: string]; thumbnail: [carriageId: string, bytes: Uint8Array] }>()
@@ -96,7 +96,7 @@ async function rebuild() {
         if (object.userData.partId) applyTransform(object, asset.partTransforms?.[object.userData.partId])
         if (asset.hiddenParts.includes(object.userData.partId)) object.visible = false
         if (object instanceof THREE.Mesh) {
-          if (asset.flipV) {
+          if (asset.flipV !== Boolean(asset.legacyUvCorrection)) {
             const source = object.geometry
             const existing = flipped.get(source)
             const geometry = existing ?? source.clone()

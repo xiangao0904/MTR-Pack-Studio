@@ -163,6 +163,7 @@ pub struct AssetDefinition {
     #[serde(default)] pub dependencies: Vec<AssetDependency>,
     #[serde(default)] pub parts: Vec<ModelPartSummary>,
     #[serde(default)] pub warnings: Vec<String>,
+    #[serde(default)] pub legacy_uv_correction: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
