@@ -427,6 +427,7 @@ fn get_model_asset(state: State<AppState>, asset_id: String) -> Result<AssetDefi
 fn asset_preview(container: &mut Container, asset: &AssetDefinition, bindings: &[MaterialBinding]) -> Result<Vec<u8>, String> {
     let mut document: model::ModelDocument = rmp_serde::from_slice(&container.read_blob(&asset.document_hash)?).map_err(|e| e.to_string())?;
     let mut textures = std::collections::BTreeMap::new();
+    let mut normalized = std::collections::BTreeMap::new();
     let dependency_hash = |texture: &str| -> Result<String,String> {
         let name=texture.rsplit(['/', '\\']).next().unwrap_or(texture);
         let mut matches=asset.dependencies.iter().filter(|dep|dep.name.eq_ignore_ascii_case(name));
@@ -441,12 +442,19 @@ fn asset_preview(container: &mut Container, asset: &AssetDefinition, bindings: &
     for material in &mut document.materials {
         let binding=bindings.iter().find(|binding|binding.material_id==material.id);
         let hash=if let Some(hash)=binding.and_then(|b|b.texture_asset_id.clone()){Some(hash)}else{material.texture.as_deref().map(&dependency_hash).transpose()?};
-        if let Some(hash)=hash {textures.insert(material.id.clone(),normalize_png(&container.read_blob(&hash)?)?);}
+        if let Some(hash)=hash {textures.insert(material.id.clone(),normalized_texture(container,&hash,&mut normalized)?);}
         let mut maps=material.properties.maps.iter().filter(|(channel,_)|!binding.is_some_and(|b|b.properties.maps.contains_key(channel))).map(|(channel,name)|Ok((*channel,dependency_hash(name)?))).collect::<Result<std::collections::BTreeMap<_,_>,String>>()?;
         if let Some(binding)=binding {maps.extend(binding.properties.maps.clone());material.properties.overlay(&binding.properties);}
-        for (channel,hash) in maps {textures.insert(format!("{}:{}",material.id,channel.key()),normalize_png(&container.read_blob(&hash)?)?);}
+        for (channel,hash) in maps {textures.insert(format!("{}:{}",material.id,channel.key()),normalized_texture(container,&hash,&mut normalized)?);}
     }
     model::to_glb_with_textures(&document, &textures)
+}
+
+fn normalized_texture(container: &mut Container, hash: &str, cache: &mut std::collections::BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, String> {
+    if let Some(bytes) = cache.get(hash) { return Ok(bytes.clone()); }
+    let bytes = normalize_png(&container.read_blob(hash)?)?;
+    cache.insert(hash.to_string(), bytes.clone());
+    Ok(bytes)
 }
 
 #[tauri::command(async)]
@@ -514,7 +522,9 @@ fn normalize_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if bytes.len() > 32 * 1024 * 1024 { return Err("Images must be smaller than 32 MiB.".into()); }
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
     let mut limits = image::Limits::default(); limits.max_image_width = Some(8192); limits.max_image_height = Some(8192); limits.max_alloc = Some(256 * 1024 * 1024); reader.limits(limits);
+    let already_png = reader.format() == Some(image::ImageFormat::Png);
     let image = reader.decode().map_err(|e| format!("Unable to decode image: {e}"))?;
+    if already_png { return Ok(bytes.to_vec()); }
     let mut output = std::io::Cursor::new(Vec::new());
     image.write_to(&mut output, image::ImageFormat::Png).map_err(|e| e.to_string())?;
     Ok(output.into_inner())

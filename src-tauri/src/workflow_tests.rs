@@ -7,6 +7,15 @@ fn glb_json(bytes: &[u8]) -> serde_json::Value {
 }
 
 #[test]
+fn valid_png_bytes_are_reused_without_reencoding() {
+    let mut output=std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2,2,image::Rgba([12,34,56,78])).write_to(&mut output,image::ImageFormat::Png).unwrap();
+    let bytes=output.into_inner();
+    assert_eq!(normalize_png(&bytes).unwrap(),bytes);
+    assert!(normalize_png(&bytes[..bytes.len()/2]).is_err());
+}
+
+#[test]
 fn pbr_import_bindings_and_images_survive_reopen_and_glb_conversion() {
     use crate::material::{AlphaMode, MaterialProperties, TextureChannel};
     let root=std::env::temp_dir().join(format!("mtr-pbr-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
