@@ -112,7 +112,12 @@ async function rebuild() {
           for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.wireframe = props.wireframe
         }
       })
-      offset.add(model); instance.add(offset); group.add(instance)
+      // Imported documents use the pack's reflected X axis. Undo that reflection
+      // at the preview boundary so labels and asymmetric details match the source model.
+      const coordinateFrame = new THREE.Group()
+      coordinateFrame.scale.x = -1
+      coordinateFrame.add(model)
+      offset.add(coordinateFrame); instance.add(offset); group.add(instance)
     }))
     const failure = results.find(result => result.status === 'rejected')
     if (failure?.status === 'rejected') throw failure.reason
