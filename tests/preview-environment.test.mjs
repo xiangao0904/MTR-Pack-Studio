@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
 import { PreviewEnvironment } from '../src/lib/preview-environment.ts'
+import { previewLightDirection } from '../src/lib/preview-environment-map.ts'
 import { defaultViewportSettings } from '../src/lib/viewport-settings.ts'
 
 function fixture() {
@@ -53,10 +54,10 @@ test('Minecraft ground remains one metre per tile and cleans scenery and shadow 
 test('sun and light agree and shadow frustum includes model plus low-angle ground projection',()=>{
   const f=fixture(),settings={...defaultViewportSettings('minecraft'),lightAzimuth:215,lightElevation:10,shadowQuality:'high',ground:false}
   f.environment.apply(f.root,'minecraft',settings)
-  let light,sun;f.scene.traverse(object=>{if(object instanceof THREE.DirectionalLight)light=object;if(object instanceof THREE.Sprite)sun=object})
+  let light;f.scene.traverse(object=>{if(object instanceof THREE.DirectionalLight)light=object})
   assert.equal(light.shadow.mapSize.x,4096);assert.equal(light.castShadow,true)
   const direction=light.position.clone().sub(light.target.position).normalize()
-  assert.ok(direction.distanceTo(sun.position.clone().sub(light.target.position).normalize())<1e-10)
+  assert.ok(direction.distanceTo(previewLightDirection(settings))<1e-10)
   const camera=light.shadow.camera;camera.updateMatrixWorld(true)
   const bounds=new THREE.Box3().setFromObject(f.root)
   const points=[bounds.min.clone(),bounds.max.clone(),new THREE.Vector3(bounds.min.x,bounds.max.y,bounds.max.z),new THREE.Vector3(bounds.max.x,bounds.max.y,bounds.min.z)]
@@ -81,5 +82,18 @@ test('only material mode has an optional floor; studio stays empty and Minecraft
   f.environment.apply(f.root,'material',{...defaultViewportSettings('material'),ground:false});assert.equal(groundCount(),0)
   f.environment.apply(f.root,'material',{...defaultViewportSettings('material'),ground:true});assert.equal(groundCount(),1)
   f.environment.apply(f.root,'minecraft',{...defaultViewportSettings('minecraft'),ground:false});assert.equal(groundCount(),1)
+  f.dispose()
+})
+
+test('Minecraft keeps block clouds in one instanced draw and disposes instance buffers',()=>{
+  const f=fixture(),settings=defaultViewportSettings('minecraft')
+  f.environment.apply(f.root,'minecraft',settings)
+  const clouds=f.scene.getObjectByName('Minecraft block clouds')
+  assert.ok(clouds instanceof THREE.InstancedMesh);assert.ok(clouds.count>0)
+  assert.deepEqual([clouds.geometry.parameters.width,clouds.geometry.parameters.height,clouds.geometry.parameters.depth],[16,3,16])
+  const matrix=new THREE.Matrix4();clouds.getMatrixAt(0,matrix);assert.equal(matrix.elements[13],48)
+  let disposed=0;clouds.addEventListener('dispose',()=>disposed++)
+  f.environment.apply(f.root,'minecraft',{...settings,cloudCover:0})
+  assert.equal(disposed,1);assert.equal(f.scene.getObjectByName('Minecraft block clouds'),undefined)
   f.dispose()
 })

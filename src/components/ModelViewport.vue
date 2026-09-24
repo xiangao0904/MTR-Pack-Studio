@@ -217,7 +217,7 @@ function captureThumbnail(carriageId: string) {
 function updateEnvironment() {
   pipeline?.clearMaterials()
   const settings = normalizeViewportSettings(props.renderMode, props.settings)
-  if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings))
+  if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings), environmentMap.background)
   environment?.apply(content, props.renderMode, settings)
   pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity)
   if(content && renderer)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)

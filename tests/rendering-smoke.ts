@@ -10,7 +10,7 @@ renderer.setSize(720,480);renderer.outputColorSpace=THREE.SRGBColorSpace;rendere
 renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.BasicShadowMap;renderer.shadowMap.autoUpdate=false
 document.body.append(renderer.domElement)
 const scene=new THREE.Scene(),root=new THREE.Group();scene.add(root)
-const camera=new THREE.PerspectiveCamera(45,1.5,.05,100);camera.position.set(6,5,7);camera.lookAt(0,1,0);camera.updateMatrixWorld()
+const camera=new THREE.PerspectiveCamera(45,1.5,.05,10000);camera.position.set(6,5,7);camera.lookAt(0,1,0);camera.updateMatrixWorld()
 const pipeline=new PreviewRenderer(renderer,scene,camera);pipeline.setSize(720,480,1)
 const map=new PreviewEnvironmentMap(renderer),environment=new PreviewEnvironment(scene,undefined,pipeline.lighting)
 const pixels=new Uint8Array([255,255,255,255, 20,80,220,255, 20,80,220,255, 255,255,255,255])
@@ -21,7 +21,7 @@ const sphere=new THREE.Mesh(new THREE.SphereGeometry(.55,40,32),new THREE.MeshSt
 let settings={...defaultViewportSettings('material'),lightAzimuth:300,lightElevation:55},mode='material',gi=true
 const errors:string[]=[];renderer.debug.onShaderError=(_gl,_program,_vertex,_fragment)=>{errors.push('Shader compilation failed')}
 function render(){pipeline.render()}
-function apply(){pipeline.clearMaterials();environment.setEnvironmentMap(map.update(mode as 'material',settings));environment.apply(root,mode as 'material',settings);pipeline.setAO(settings.ambientOcclusion);pipeline.setIndirect(gi?settings.indirectIntensity:0);renderer.shadowMap.needsUpdate=true;render()}
+function apply(){pipeline.clearMaterials();environment.setEnvironmentMap(map.update(mode as 'material',settings),map.background);environment.apply(root,mode as 'material',settings);pipeline.setAO(settings.ambientOcclusion);pipeline.setIndirect(gi?settings.indirectIntensity:0);renderer.shadowMap.needsUpdate=true;render()}
 function capture(){render();const data=new Uint8Array(720*480*4);const gl=renderer.getContext();gl.readPixels(0,0,720,480,gl.RGBA,gl.UNSIGNED_BYTE,data);return data}
 function difference(a:Uint8Array,b:Uint8Array){let changed=0,total=0;for(let i=0;i<a.length;i+=4){let delta=0;for(let c=0;c<3;c++)delta+=Math.abs(a[i+c]!-b[i+c]!);if(delta>3)changed++;total+=delta}return {changed,mean:total/(a.length/4*3)}}
 function run(){
@@ -44,3 +44,18 @@ document.querySelector('#gi')!.addEventListener('click',()=>{gi=!gi;apply();docu
 document.querySelector('#studio')!.addEventListener('click',()=>{mode='studio';apply()})
 apply();document.querySelector('#results')!.textContent='Ready. The checker texture must remain visible in Studio.'
 window.addEventListener('beforeunload',()=>{pipeline.dispose();environment.dispose();map.dispose();root.traverse(o=>{if(o instanceof THREE.Mesh){o.geometry.dispose();(o.material as THREE.Material).dispose()}});checker.dispose();renderer.dispose()})
+
+function skyPreset(elevation:number,cloudCover:number){mode='minecraft';settings={...defaultViewportSettings('minecraft'),lightElevation:elevation,lightAzimuth:225,cloudCover};camera.position.set(6,3,7);camera.lookAt(0,2,0);camera.updateMatrixWorld();apply();document.querySelector('#results')!.textContent='Cached HDR sky / instanced block clouds / unchanged sampling and local bounce.'}
+for(const [id,elevation,coverage] of [['day',45,.55],['sunset',10,.55],['overcast',35,.95]] as const){document.querySelector('#'+id)!.addEventListener('click',()=>skyPreset(elevation,coverage))}
+
+document.querySelector('#sky-check')!.addEventListener('click',()=>{
+  skyPreset(45,.55);const day=capture(),background=map.background,environmentTexture=scene.environment
+  const repeat=map.update('minecraft',settings),cacheStable=repeat===environmentTexture && map.background===background
+  skyPreset(10,.55);const sunset=capture();skyPreset(35,.95);const cloudy=capture()
+  const skyChanges=difference(day,sunset).changed>10000 && difference(day,cloudy).changed>10000
+  render();const gl=renderer.getContext(),pixel=new Uint8Array(4);gl.readPixels(360,240,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel)
+  const start=performance.now();for(let i=0;i<12;i++)render();gl.readPixels(360,240,1,1,gl.RGBA,gl.UNSIGNED_BYTE,pixel)
+  const frameMilliseconds720x480=(performance.now()-start)/12
+  const glError=renderer.getContext().getError();skyPreset(45,.55)
+  document.querySelector('#results')!.textContent=JSON.stringify({passed:skyChanges&&cacheStable&&glError===0&&!errors.length,cacheStable,skyChanges,glError,errors,frameMilliseconds720x480,note:'Batch average including CPU submission and GPU readback on this device; not a low-end hardware guarantee.'},null,2)
+})

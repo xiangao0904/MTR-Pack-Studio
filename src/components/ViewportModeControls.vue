@@ -23,7 +23,7 @@ const hint = (mode: PreviewRenderMode) => mode === 'studio' ? t('studioModeHint'
 function update<K extends keyof ViewportSettings>(key: K, value: ViewportSettings[K]) {
   emit('update:settings', { ...props.settings, [key]: value })
 }
-function slider(event: Event, key: 'lightAzimuth' | 'lightElevation' | 'lightIntensity' | 'environmentIntensity' | 'lightSize' | 'indirectIntensity') {
+function slider(event: Event, key: 'lightAzimuth' | 'lightElevation' | 'lightIntensity' | 'environmentIntensity' | 'lightSize' | 'indirectIntensity' | 'cloudCover' | 'skyHaze') {
   update(key, Number((event.target as HTMLInputElement).value))
 }
 function reset() {
@@ -125,6 +125,10 @@ onBeforeUnmount(() => {
     <section v-if="open" :id="`${id}-settings`" ref="panel" class="settings-panel" :style="panelPosition" role="dialog" :aria-label="t('viewportSettings')" @focusout="focusOut">
       <header>{{ label(mode) }}<span>{{ t('viewportSettings') }}</span></header>
       <div class="toggle-row"><label><input type="checkbox" :checked="showGrid" @change="emit('update:showGrid', ($event.target as HTMLInputElement).checked)">{{ t('grid') }}</label><label><input type="checkbox" :checked="wireframe" @change="emit('update:wireframe', ($event.target as HTMLInputElement).checked)">{{ t('wireframe') }}</label></div>
+      <template v-if="mode === 'minecraft'">
+        <label class="slider-row"><span>{{ t('cloudCover') }}<output>{{ Math.round(settings.cloudCover * 100) }}%</output></span><input type="range" min="0" max="1" step="0.05" :aria-label="t('cloudCover')" :value="settings.cloudCover" @input="slider($event, 'cloudCover')"></label>
+        <label class="slider-row"><span>{{ t('skyHaze') }}<output>{{ Math.round(settings.skyHaze * 100) }}%</output></span><input type="range" min="0" max="1" step="0.05" :aria-label="t('skyHaze')" :value="settings.skyHaze" @input="slider($event, 'skyHaze')"></label>
+      </template>
       <label class="ground-toggle"><input type="checkbox" :checked="settings.ambientOcclusion" @change="update('ambientOcclusion', ($event.target as HTMLInputElement).checked)">{{ t('ambientOcclusion') }}</label>
       <label class="ground-toggle"><input type="checkbox" :checked="settings.pixelTextures" @change="update('pixelTextures', ($event.target as HTMLInputElement).checked)">{{ t('pixelTextures') }}</label>
         <label class="quality-row"><span>{{ t('shadowQuality') }}</span><select :value="settings.shadowQuality" @change="update('shadowQuality', ($event.target as HTMLSelectElement).value as ViewportSettings['shadowQuality'])"><option value="standard">{{ t('qualityStandard') }}</option><option value="high">{{ t('qualityHigh') }}</option></select></label>

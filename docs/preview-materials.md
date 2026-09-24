@@ -85,3 +85,29 @@ checks that AO leaves direct-only lighting unchanged within 8-bit rounding,
 and exercises orthographic cameras, thumbnail sizes and Studio texture retention.
 The fixture is isolated from project data. The result must report `passed: true`
 and no shader/WebGL errors. Inspect the soft shadow and checker texture visually.
+
+## Minecraft atmosphere
+
+Minecraft bakes a 1024 x 512 half-float HDR atmosphere on the GPU when sun
+azimuth/elevation/size, cloud coverage or haze changes. Rayleigh-like angular
+variation, forward-scattering glow and a sun disk replace the flat background.
+Low sun warms the horizon and key light. The source feeds a cached 256-pixel
+cubemap background and PMREM lighting; fog follows the horizon palette.
+
+Clouds retain vanilla-style flat voxel geometry at 48 metres, grouped into a
+single InstancedMesh draw. Coverage changes their density. They receive scene
+lighting; the cached sky environment approximates their overall dimming without
+capturing individual clouds in reflections or tracing their shadows. Clouds stay
+static. Sky and reflection precomputation is reused during camera movement and
+model edits. There is no per-frame atmospheric ray marching or path tracing.
+
+Frame rate, rendering resolution, MSAA, AO samples, shadow resolution and local
+bounce retain the existing renderer settings. No extra FPS or sampling limit is
+introduced. The improvement targets sky lighting and colour rather than reproducing
+all effects of a particular shader pack. Actual performance depends on GPU,
+viewport size and model complexity.
+
+The regression page includes daylight, low-sun and dense-cloud views. **Check sky
+and frame cost** checks cache reuse, visible weather changes and WebGL errors, and
+reports a 720 x 480 batch timing including GPU readback. This synthetic fixture is
+not a minimum-hardware performance certification.
