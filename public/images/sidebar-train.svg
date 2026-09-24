@@ -1,112 +1,56 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 347 400" fill="none">
   <defs>
-    <linearGradient id="side" x1="90" y1="115" x2="80" y2="308" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#394248"/><stop offset="1" stop-color="#293238"/>
-    </linearGradient>
-    <linearGradient id="cab" x1="171" y1="121" x2="294" y2="302" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#3e474e"/><stop offset="1" stop-color="#303940"/>
-    </linearGradient>
-    <linearGradient id="glass" x1="198" y1="129" x2="264" y2="258" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#242d33"/><stop offset="1" stop-color="#171e23"/>
-    </linearGradient>
-    <linearGradient id="fade" x1="0" y1="60" x2="0" y2="435" gradientUnits="userSpaceOnUse">
-      <stop stop-color="white" stop-opacity=".65"/><stop offset=".24" stop-color="white"/>
-      <stop offset=".8" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0"/>
+    <linearGradient id="fade" x1="0" y1="70" x2="0" y2="425" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity=".7"/>
+      <stop offset=".3" stop-color="white"/>
+      <stop offset=".8" stop-color="white"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
     </linearGradient>
     <mask id="scene"><path d="M0 40h347v400H0z" fill="url(#fade)"/></mask>
-    <!-- A wheel is drawn as a rim, recessed disc and hub, in side perspective. -->
-    <g id="wheel">
-      <ellipse rx="13" ry="19" fill="#171e23" stroke="#424c53" stroke-width="3"/>
-      <ellipse rx="8.5" ry="14" fill="#242d33" stroke="#303a41" stroke-width="2"/>
-      <ellipse rx="3.5" ry="6" fill="#4a555d"/>
-    </g>
-    <g id="spring" stroke="#4a555d" stroke-width="1.7" stroke-linejoin="round">
-      <path d="M-7-7H7M-7-4 7-2-7 1 7 4-7 7H7"/>
-    </g>
   </defs>
   <g mask="url(#scene)" stroke-linejoin="round" stroke-linecap="round">
-    <!-- Track heads pass under the two wheel contact lines. -->
-    <g stroke="#2e383e">
-      <path d="m-25 360 379 61m-373-54 63-34m-12 43 68-35m-8 45 71-36m-7 47 76-38m-7 49 78-39" stroke-width="6"/>
-      <path d="m-26 356 387 63m-387-87 387 57" stroke-width="4"/>
+    <!-- Quiet track lines anchor the silhouette. -->
+    <path d="m-30 358 390 61m-390-86 390 57" stroke="#343d43" stroke-width="5"/>
+
+    <!-- One simple frame connects the two visible wheelsets. -->
+    <path d="m-25 300 198 16 99-5-9 22-90 13-198-23Z" fill="#20292f"/>
+    <g fill="#20292f" stroke="#3b464e" stroke-width="4">
+      <ellipse cx="59" cy="343" rx="12" ry="18"/>
+      <ellipse cx="140" cy="355" rx="13" ry="19"/>
     </g>
-    <path d="m-24 354 380 62m-380-86 380 57" stroke="#424c52" stroke-width="1.2"/>
+    <path d="m46 326 31 4 14 10 25 4 13-6 25 4v10l-26-4-11 5-29-4-15-10-27-4Z" fill="#3b464e"/>
+    <path d="m76 311 47 5v19l-47-7Z" fill="#303b43"/>
 
-    <!-- Recessed chassis and equipment cabinets under the passenger floor. -->
-    <path d="m-29 289 207 19 112-6-11 25-106 18-202-24Z" fill="#192126"/>
-    <path d="m-20 312 54 5v26l-54-7Z" fill="#303a41" stroke="#414b52"/>
-    <path d="m-13 319 39 4m-39 5 39 4m-39-1v-11m7 12v-11m7 12v-11m7 12v-11m7 12v-11m7 12v-11" stroke="#1d272d" stroke-width="2"/>
-    <path d="m43 320 31 3v17l-31-4Z" fill="#242e35" stroke="#3a454d"/>
+    <!-- Broad, uninterrupted body panels keep the drawing legible at sidebar size. -->
+    <path d="m-35 124 160-43c30-8 51-5 72 5 37 18 65 49 77 82l28 123 4 21-128 5-213-18Z" fill="#353f46"/>
+    <path d="m-35 124 160-43c30-8 51-5 72 5 31 15 55 39 71 68l-97-13c-8-30-24-45-48-40l-158 43Z" fill="#252e34"/>
+    <path d="m-35 124 160-43c30-8 51-5 72 5 31 15 55 39 71 68" stroke="#3d474e" stroke-width="2.5"/>
+    <path d="m-30 161 144-37c21-5 32 6 37 29l18 117-39-14-160 1Z" fill="#20292f"/>
 
-    <!-- Far wheels and axles sit behind the visible bogie side frame. -->
-    <use href="#wheel" transform="translate(98 333) scale(.82)"/>
-    <use href="#wheel" transform="translate(177 345) scale(.87)"/>
-    <path d="m64 348 34-15m45 27 34-15" stroke="#3a454d" stroke-width="6"/>
-    <use href="#wheel" transform="translate(64 348)"/>
-    <use href="#wheel" transform="translate(143 360)"/>
+    <!-- Two door leaves and a cab-side window; no small fittings. -->
+    <path d="m-20 184 29-7v72l-29 1Zm48-12 56-14 2 134-58-4Z" fill="#353f46"/>
+    <path d="m35 182 17-4v66l-17 1Zm24-6 18-4 1 70-19 1Z" fill="#20292f"/>
+    <path d="m55 166 1 123" stroke="#20292f" stroke-width="2"/>
+    <path d="m98 157 25-6 13 88-37 1Z" fill="#353f46"/>
+    <path d="m104 165 14-3 10 70-23 1Z" fill="#20292f"/>
+    <path d="m-30 258 161-2 39 17 3 15-43-18-160 1Z" fill="#3d474e"/>
+    <path d="m-30 296 203 13v8l-203-15Z" fill="#3d474e"/>
 
-    <!-- Two air springs carry the bolster; two axles share one bogie frame. -->
-    <path d="m61 314 78 11 31-12-78-10Z" fill="#3f4951"/>
-    <path d="m72 313 23 3v10l-23-3Zm50 7 23 3v10l-23-3Z" fill="#1a2329" stroke="#48535b" stroke-width="2"/>
-    <path d="m75 318 17 2m33 5 17 2" stroke="#3c474f" stroke-width="2"/>
-    <path d="m51 330 28 4 11 8 26 4 12-5 28 4 1 10-28-3-10 5-32-5-11-9-26-4Z" fill="#3e4951" stroke="#536069" stroke-width="1.2"/>
-    <path d="m82 340 8 5 28 4 9-4" stroke="#1c272e" stroke-width="3"/>
-    <use href="#spring" transform="translate(54 338)"/>
-    <use href="#spring" transform="translate(76 341)"/>
-    <use href="#spring" transform="translate(132 350)"/>
-    <use href="#spring" transform="translate(154 353)"/>
-    <path d="m60 343 9 1v11l-9-1Zm78 12 10 1v11l-10-1Z" fill="#46535c" stroke="#202a31" stroke-width="1.5"/>
-    <path d="m88 326 12 19m-8-21 12 19" stroke="#55616a" stroke-width="2.2"/>
-    <path d="m79 359 45 7m-70-27-6 6v10m108-4 6 5v10" stroke="#333f47" stroke-width="3"/>
-
-    <!-- Continuous roof, side wall and front structural shell. -->
-    <path d="m-34 122 161-43c28-8 49-6 69 3 37 17 67 48 80 83l27 119 4 21-126 9-215-20Z" fill="url(#side)"/>
-    <path d="m-34 122 161-43c28-8 49-6 69 3 35 16 60 42 76 74l-97-16c-8-30-24-45-49-41l-160 43Z" fill="#252e34"/>
-    <path d="m-34 122 161-43c28-8 49-6 69 3 34 16 60 42 76 74" stroke="#485159" stroke-width="2.2"/>
-    <path d="m-24 146 143-38c23-6 38 8 44 35l22 139-24-14-18-120c-3-16-12-23-26-20l-141 35Z" fill="#414b52"/>
-    <path d="m-30 170 148-38c12-3 20 4 23 18l17 114-188-5Z" fill="#202a30"/>
-
-    <!-- Side doors have inset glazing, seals, handles and a shared sill. -->
-    <path d="m-23 180 36-8v113l-36-2Zm47-12 60-15 3 136-63-3Z" fill="#2d373e" stroke="#4b565e" stroke-width="1.2"/>
-    <path d="m-16 189 21-5v58l-21 1Zm47-11 20-5v68l-20 1Zm27-7 20-5 1 74-21 1Z" fill="#172126" stroke="#404b53" stroke-width="2"/>
-    <path d="m54 161 1 126m-43-38 96 2M32 259v19m47-18v20" stroke="#1c272e" stroke-width="1.4"/>
-    <path d="M47 247v9m16-9v9" stroke="#5b666e" stroke-width="2"/>
-    <path d="m94 157 26-6 12 81-37 1Z" fill="#172126" stroke="#455159" stroke-width="2"/>
-    <path d="m99 158 18-4 3 14-21 4Z" fill="#344149"/>
-    <path d="m-31 258 166 2 35 18 3 12-40-19-164-3Z" fill="#465159"/>
-    <path d="m95 272 41 1 26 12 2 15-68-5Z" stroke="#3e4a52"/>
-    <path d="m-31 291 205 15 3 9-208-16Z" fill="#4a555c"/>
-    <path d="m24 288 63 3v5l-63-3Z" fill="#5a656d"/>
-
-    <!-- Cab glazing is enclosed by pillars; lamps and wipers mount to the face. -->
-    <path d="M135 100c29-9 48-4 70 10 28 18 47 43 58 72l24 97-113 4-22-134c-4-23-9-40-17-49Z" fill="url(#cab)"/>
-    <path d="M150 108c18-4 35 2 51 13 25 17 42 38 53 65l20 75-91 3-19-115c-3-19-8-31-14-41Z" fill="url(#glass)" stroke="#536069" stroke-width="1.2"/>
-    <path d="m166 133 39 5 8 12-43-4Z" fill="#121c22" stroke="#39464e"/>
-    <path d="m175 137 25 4" stroke="#48575f" stroke-width="2"/>
-    <path d="m172 154 9 2 18 94-9 1Zm63 13 7 7 21 76-6 1Z" fill="#34434c"/>
-    <path d="m215 150 20 105" stroke="#38474f" stroke-width="2"/>
-    <path d="m211 254 10-31m-16 10 28-14m25 33-7-21m-9-2 18 5" stroke="#67747c" stroke-width="1.7"/>
-    <path d="m177 271 102-3 7 18-106 4Z" fill="#222d34"/>
-    <g fill="#57646c" stroke="#18232a" stroke-width="2">
-      <ellipse cx="192" cy="278" rx="5.5" ry="6.5"/><ellipse cx="205" cy="278" rx="4" ry="5"/>
-      <ellipse cx="260" cy="275" rx="3.5" ry="5"/><ellipse cx="270" cy="275" rx="4" ry="5.5"/>
+    <!-- A single curved windscreen and paired lights define the cab. -->
+    <path d="M140 102c22-4 42 1 63 15 27 18 46 42 57 72l22 90-103 2-21-130c-4-23-10-40-18-49Z" fill="#20292f"/>
+    <path d="m160 129 35 4 5 11-37-3Zm9 26 22 3 16 94-22-1Zm70 16 8 8 18 73-8 1Z" fill="#353f46"/>
+    <g fill="#3d474e">
+      <ellipse cx="193" cy="269" rx="6" ry="7"/>
+      <ellipse cx="207" cy="269" rx="5" ry="6.5"/>
+      <ellipse cx="264" cy="267" rx="3.5" ry="6"/>
+      <ellipse cx="274" cy="267" rx="3" ry="6"/>
     </g>
-    <path d="m174 289 112-4 15-6 6 26-124 10-11-9Z" fill="url(#cab)"/>
-    <path d="m183 298 105-6m-94 10 83-5" stroke="#4f5b63" stroke-width="1.2"/>
-    <path d="m176 308 130-10 1 7-124 10Z" fill="#46535b"/>
+    <path d="m172 284 111-1 13-4 10 21v12l-128 5-8-13Z" fill="#353f46"/>
 
-    <!-- Front apron and recessed central coupler pocket. -->
-    <path d="m187 315 108-8-7 24-31 5-10-13-19 1-7 15-29-3Z" fill="#303c44" stroke="#424f58"/>
-    <path d="m222 316 33-2 7 17-43 5Z" fill="#131e25"/>
-    <path d="m192 321 17-1-3 10-13-1m74-12 17-1-2 10-11 2" stroke="#526069" stroke-width="1.5"/>
-    <!-- Draft gear, shank, articulated head and lower electrical connector. -->
-    <path d="m230 320 15-1 8 15-15 4-9-7Z" fill="#46545e" stroke="#5b6973"/>
-    <path d="m238 332 12-3 18 16-13 8Z" fill="#596771"/>
-    <path d="m245 335 5-1 13 12-5 3Z" fill="#2b3943"/>
-    <path d="m254 340 18-4 12 9-2 16-19 5-11-10Z" fill="#465660" stroke="#6b7982" stroke-width="1.4"/>
-    <path d="m263 346 13-4 1 12-11 4-1-5 5-2v-3l-7 2Z" fill="#17252e"/>
-    <path d="m253 357 9 9 20-5-3 6-18 5-9-8Z" fill="#2c3c46" stroke="#4b5c67"/>
-    <path d="m222 329-3 14c-1 7 9 12 15 6l6-7m17-15 11 4 9 3" stroke="#53616b" stroke-width="2.3"/>
-    <path d="m210 336-7 11 23 7" stroke="#394954" stroke-width="2"/>
+    <!-- The coupler reads as one compact shape, attached beneath the cab centre. -->
+    <path d="m191 316 96-4-7 19-33 4-13-10-13 13-28-3Z" fill="#303b43"/>
+    <path d="m232 318 14-1 4 17 16 8-5 10-24-13Z" fill="#3d474e"/>
+    <path d="m252 338 18-2 8 7-3 13-18 3-7-8Z" fill="#3d474e"/>
+    <path d="m259 344 11-2-1 9-10 2Z" fill="#20292f"/>
   </g>
 </svg>
