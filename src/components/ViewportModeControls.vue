@@ -122,7 +122,7 @@ onBeforeUnmount(() => {
     </div>
     <button ref="settingsButton" class="settings-button" :class="{ active: open }" type="button" :title="t('viewportSettings')" :aria-label="t('viewportSettings')" aria-haspopup="dialog" :aria-expanded="open" :aria-controls="`${id}-settings`" @click="toggleSettings"><Settings2 :size="17"/></button>
     <Teleport to="body">
-    <section v-if="open" :id="`${id}-settings`" ref="panel" class="settings-panel" :style="panelPosition" role="dialog" :aria-label="t('viewportSettings')" @focusout="focusOut">
+    <Transition name="viewport-popover"><section v-if="open" :id="`${id}-settings`" ref="panel" class="settings-panel" :style="panelPosition" role="dialog" :aria-label="t('viewportSettings')" @focusout="focusOut">
       <header>{{ label(mode) }}<span>{{ t('viewportSettings') }}</span></header>
       <div class="toggle-row"><label><input type="checkbox" :checked="showGrid" @change="emit('update:showGrid', ($event.target as HTMLInputElement).checked)">{{ t('grid') }}</label><label><input type="checkbox" :checked="wireframe" @change="emit('update:wireframe', ($event.target as HTMLInputElement).checked)">{{ t('wireframe') }}</label></div>
       <template v-if="mode === 'minecraft'">
@@ -140,7 +140,7 @@ onBeforeUnmount(() => {
         <label class="slider-row"><span>{{ t('indirectIntensity') }}<output>{{ settings.indirectIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="2" step="0.1" :aria-label="t('indirectIntensity')" :value="settings.indirectIntensity" @input="slider($event, 'indirectIntensity')"></label>
         <label v-if="mode === 'material'" class="ground-toggle"><input type="checkbox" :checked="settings.ground" @change="update('ground', ($event.target as HTMLInputElement).checked)">{{ t('ground') }}</label>
       <button type="button" class="reset-button" @click="reset">{{ t('resetViewportSettings') }}</button>
-    </section>
+    </section></Transition>
     </Teleport>
   </div>
 </template>
@@ -153,6 +153,8 @@ onBeforeUnmount(() => {
 .mode-button:focus-visible,.settings-button:focus-visible,.reset-button:focus-visible{outline:2px solid #d7dbe2;outline-offset:2px}.settings-button{width:26px;height:30px}
 .mode-tooltip{display:none;position:absolute;top:calc(100% + 12px);left:50%;transform:translateX(-50%);width:190px;padding:10px 12px;white-space:normal;text-align:left;font-size:11px;line-height:1.5;font-weight:400;background:#24262b;border:1px solid #ffffff12;border-radius:6px;box-shadow:0 6px 24px #0007;pointer-events:none;z-index:65;color:#a2a5ad}.mode-tooltip strong{display:block;color:#eef0f3;font-size:12px;margin-bottom:3px}.mode-button:hover .mode-tooltip,.mode-button:focus-visible .mode-tooltip{display:block}
 .settings-panel{color-scheme:dark;position:fixed;z-index:1000;width:276px;max-width:calc(100vw - 16px);overflow-y:auto;overscroll-behavior:contain;padding:15px;background:#222429;border:1px solid #ffffff12;border-radius:8px;box-shadow:0 12px 36px #0008;font:12px var(--studio-font);box-sizing:border-box;color:var(--studio-muted)}
+.viewport-popover-enter-active,.viewport-popover-leave-active{transition:opacity var(--motion-panel,180ms) ease,transform var(--motion-panel,180ms) var(--motion-ease,ease)}.viewport-popover-enter-from,.viewport-popover-leave-to{opacity:0;transform:translateY(-5px);pointer-events:none}
 .settings-panel header{display:flex;flex-direction:column;gap:3px;font-size:13px;font-weight:600;color:#eef0f3;padding-bottom:12px;border-bottom:1px solid #ffffff0e}.settings-panel header span{font-size:11px;font-weight:400;color:#92969f}.toggle-row{display:flex;justify-content:space-between;margin:14px 0;gap:12px}.toggle-row label,.ground-toggle{display:flex;align-items:center;gap:7px;cursor:pointer}.settings-panel input{accent-color:#c8cdd7}.settings-panel input[type=checkbox]{margin:0;width:14px;height:14px}
 .quality-row{display:flex;align-items:center;justify-content:space-between;margin:16px 0 13px;gap:10px}.quality-row select{background:#191b1f;border:1px solid #ffffff12;border-radius:4px;color:#eef0f3;padding:5px 7px;font:inherit;max-width:120px}.slider-row{display:block;margin:13px 0}.slider-row>span{display:flex;justify-content:space-between;align-items:center;gap:8px}.slider-row output{font-variant-numeric:tabular-nums;color:#b5b9c2;font-size:11px}.slider-row input{width:100%;height:15px;margin:6px 0 0;cursor:pointer}.ground-toggle{margin:14px 0}.reset-button{width:100%;margin-top:6px;padding:8px;border:1px solid #ffffff14;border-radius:4px;background:#ffffff05;color:#d1d4db;cursor:pointer;font:inherit}.reset-button:hover{background:#ffffff0a}
+@media(prefers-reduced-motion:reduce){.viewport-popover-enter-active,.viewport-popover-leave-active{transition:none!important}}
 </style>

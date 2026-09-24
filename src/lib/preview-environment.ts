@@ -6,6 +6,7 @@ import { normalizeViewportSettings, type PreviewRenderMode, type ViewportSetting
 export type { PreviewRenderMode } from './viewport-settings.ts'
 
 type MeshState = {material: THREE.Material | THREE.Material[]; castShadow: boolean; receiveShadow: boolean}
+export type PreviewLightingMood = { environment: number; direct: number; color: THREE.Color }
 const GROUND_Y = -.02
 const PREVIEW_GROUND_Y = GROUND_Y - 1
 const corners = (box: THREE.Box3) => [0,1,2,3,4,5,6,7].map(index => new THREE.Vector3(index&1 ? box.max.x : box.min.x,index&2 ? box.max.y : box.min.y,index&4 ? box.max.z : box.min.z))
@@ -29,6 +30,11 @@ export class PreviewEnvironment {
   private lighting: PreviewLighting
   constructor(scene: THREE.Scene, environmentMap?: THREE.Texture, lighting = createPreviewLighting()) { this.scene=scene;this.environmentMap=environmentMap;this.lighting=lighting;scene.add(this.scenery) }
   setEnvironmentMap(texture: THREE.Texture, background?: THREE.Texture) { this.environmentMap=texture;this.skyBackground=background }
+  lightingMood(): PreviewLightingMood { return {environment:this.scene.environmentIntensity,direct:this.lights[0]?.intensity??0,color:this.lights[0]?.color.clone()??new THREE.Color(0xffffff)} }
+  blendLighting(from: PreviewLightingMood, to: PreviewLightingMood, amount: number) {
+    this.scene.environmentIntensity=THREE.MathUtils.lerp(from.environment,to.environment,amount)
+    if(this.lights[0]){this.lights[0].intensity=THREE.MathUtils.lerp(from.direct,to.direct,amount);this.lights[0].color.copy(from.color).lerp(to.color,amount)}
+  }
 
   restoreMaterials() {
     for (const [mesh,state] of this.originals) {mesh.material=state.material;mesh.castShadow=state.castShadow;mesh.receiveShadow=state.receiveShadow}

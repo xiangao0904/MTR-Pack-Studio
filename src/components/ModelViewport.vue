@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { PreviewRenderer, filterModelTextures, prepareMaterialTextures } from '../lib/preview-renderer'
-import { PreviewEnvironment } from '../lib/preview-environment'
+import { PreviewEnvironment, type PreviewLightingMood } from '../lib/preview-environment'
 import type { PreviewRenderMode, ViewportSettings } from '../lib/viewport-settings'
 import { PreviewEnvironmentMap } from '../lib/preview-environment-map'
 import { normalizeViewportSettings } from '../lib/viewport-settings'
@@ -17,6 +17,7 @@ export interface PreviewGuide { key: string; length: number; width: number; z: n
 const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; thumbnailCarriageId?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, renderMode: 'studio' })
 const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, bytes: Uint8Array] }>()
 const host = ref<HTMLDivElement>()
+const modeTransitionKey = ref(0)
 const orientationAxes = ref([{name:'X',color:'#ed777c',x:28,y:0},{name:'Y',color:'#87dca3',x:0,y:-28},{name:'Z',color:'#80b6f1',x:-20,y:18}])
 const lastOrientation = new THREE.Quaternion(0,0,0,0)
 function updateOrientation() {
@@ -50,6 +51,9 @@ let generation = 0
 let disposed = false
 let previousKeys = ''
 let minecraftFramed = false
+let cameraTween: {start: number; fromPosition: THREE.Vector3; toPosition: THREE.Vector3; fromTarget: THREE.Vector3; toTarget: THREE.Vector3; fromHeight: number; toHeight: number} | undefined
+let lightingTween: {start: number; from: PreviewLightingMood; to: PreviewLightingMood} | undefined
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 let thumbnailSignature = ''
 let pointerStart = new THREE.Vector2()
 const byteCache = new Map<string, Promise<ArrayBuffer>>()
@@ -129,7 +133,7 @@ async function rebuild() {
   if (content) { scene.remove(content); disposeObject(content) }
   content = group; scene.add(content); updateEnvironment(); rebuildGuides(); updateSelection()
   const keys = props.assets.map(item => item.key).join('|') + props.guides.map(item => item.key).join('|')
-  if (keys !== previousKeys) { frameContent(); previousKeys = keys }
+  if (keys !== previousKeys) { frameContent(false); previousKeys = keys }
   const signature = JSON.stringify(props.assets)
   if (complete && props.thumbnailCarriageId && signature !== thumbnailSignature && props.assets.length) {
     thumbnailSignature = signature
@@ -170,9 +174,10 @@ function updateProjection() {
   else { camera.left = -orthoHeight * aspect / 2; camera.right = orthoHeight * aspect / 2; camera.top = orthoHeight / 2; camera.bottom = -orthoHeight / 2 }
   camera.updateProjectionMatrix()
 }
-function frameContent() {
+function frameContent(animate = true) {
   if (!camera || !controls) return
   const box = contentBounds(); if (box.isEmpty()) return
+  const fromPosition = camera.position.clone(), fromTarget = controls.target.clone(), fromHeight = orthoHeight
   const center = box.getCenter(new THREE.Vector3()); const extent = box.getSize(new THREE.Vector3())
   const size = Math.max(2, extent.length()); camera.near = .01; camera.far = Math.max(1000, size * 20)
   if (camera instanceof THREE.PerspectiveCamera) positionCamera(camera, box)
@@ -188,9 +193,16 @@ function frameContent() {
   }
   if (props.renderMode === 'minecraft') minecraftFramed = true
   controls.target.copy(center); camera.lookAt(center); controls.update()
+  const toPosition = camera.position.clone(), toTarget = controls.target.clone(), toHeight = orthoHeight
+  cameraTween = undefined
+  if (animate && !reducedMotion()) {
+    camera.position.copy(fromPosition); controls.target.copy(fromTarget); orthoHeight = fromHeight; updateProjection(); camera.lookAt(fromTarget)
+    cameraTween = {start: performance.now(), fromPosition, toPosition, fromTarget, toTarget, fromHeight, toHeight}
+  }
 }
 function changeCamera() {
   if (!renderer) return
+  cameraTween = undefined
   const oldTarget = controls?.target.clone() ?? new THREE.Vector3()
   if (camera instanceof THREE.PerspectiveCamera && controls) perspectivePose = {position: camera.position.clone(), target: oldTarget.clone(), zoom: camera.zoom}
   controls?.dispose()
@@ -203,7 +215,7 @@ function changeCamera() {
     camera.position.copy(perspectivePose.position); camera.zoom = perspectivePose.zoom
     controls.target.copy(perspectivePose.target); camera.lookAt(controls.target)
     updateProjection(); controls.update()
-  } else { updateProjection(); frameContent() }
+  } else { updateProjection(); frameContent(false) }
 }
 function captureThumbnail(carriageId: string) {
   if (!renderer || !scene || !content) return
@@ -222,6 +234,7 @@ function captureThumbnail(carriageId: string) {
   emit('thumbnail', carriageId, Uint8Array.from(atob(data.split(',')[1]!), character => character.charCodeAt(0)))
 }
 function updateEnvironment() {
+  lightingTween=undefined
   if(skyTimer!==undefined) {clearTimeout(skyTimer);skyTimer=undefined}
   pipeline?.clearMaterials()
   const settings = normalizeViewportSettings(props.renderMode, props.settings)
@@ -234,6 +247,7 @@ function updateEnvironment() {
   if (renderer) { renderer.shadowMap.enabled = true; renderer.shadowMap.needsUpdate = true }
 }
 function updateViewportSettings() {
+  lightingTween=undefined
   if(!renderer || !environment || !environmentMap) return
   const settings=normalizeViewportSettings(props.renderMode,props.settings)
   if(!environment.updateSettings(props.renderMode,settings)) {updateEnvironment();return}
@@ -281,6 +295,16 @@ function updateSelectionBounds() {
 }
 function isVisible(object: THREE.Object3D): boolean { return object.visible && (!object.parent || isVisible(object.parent)) }
 function pointerDown(event:PointerEvent){pointerStart.set(event.clientX,event.clientY)}
+function cancelCameraTween(){cameraTween=undefined}
+function advanceCameraTween(now:number){
+  if(!cameraTween||!camera||!controls)return
+  const tween=cameraTween, progress=Math.min(1,(now-tween.start)/260), eased=1-Math.pow(1-progress,3)
+  camera.position.lerpVectors(tween.fromPosition,tween.toPosition,eased)
+  controls.target.lerpVectors(tween.fromTarget,tween.toTarget,eased)
+  if(camera instanceof THREE.OrthographicCamera){orthoHeight=THREE.MathUtils.lerp(tween.fromHeight,tween.toHeight,eased);updateProjection()}
+  camera.lookAt(controls.target)
+  if(progress===1)cameraTween=undefined
+}
 function click(event: MouseEvent) {
   if (!renderer || !camera || !content || pointerStart.distanceTo(new THREE.Vector2(event.clientX,event.clientY))>4) return
   const bounds=renderer.domElement.getBoundingClientRect();const pointer=new THREE.Vector2((event.clientX-bounds.left)/bounds.width*2-1,-(event.clientY-bounds.top)/bounds.height*2+1)
@@ -300,9 +324,9 @@ onMounted(()=>{
   environmentMap = new PreviewEnvironmentMap(renderer)
   environment = new PreviewEnvironment(scene, undefined, pipeline.lighting); updateEnvironment()
   grid=new THREE.GridHelper(100,100,0x42454b,0x26292e);grid.visible=props.showGrid;scene.add(grid)
-  renderer.domElement.addEventListener('click',click);renderer.domElement.addEventListener('pointerdown',pointerDown)
+  renderer.domElement.addEventListener('click',click);renderer.domElement.addEventListener('pointerdown',pointerDown);renderer.domElement.addEventListener('pointerdown',cancelCameraTween);renderer.domElement.addEventListener('wheel',cancelCameraTween)
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
-  const animate=()=>{frame=requestAnimationFrame(animate);controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};animate();void rebuild()
+  const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild()
 })
 watch(()=>JSON.stringify([props.assets,props.guides,props.thumbnailCarriageId]),()=>void rebuild())
 watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],updateSelection)
@@ -310,9 +334,9 @@ watch(()=>props.cameraView,changeCamera)
 watch(()=>props.showGrid,value=>{if(grid)grid.visible=value;if(guides)guides.visible=value})
 watch(()=>props.wireframe,updateWireframe)
 watch(()=>props.settings,updateViewportSettings,{deep:true})
-watch(()=>props.renderMode,()=>{updateEnvironment();updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})
-onBeforeUnmount(()=>{disposed=true;generation++;if(skyTimer!==undefined)clearTimeout(skyTimer);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.dispose();renderer?.domElement.remove()})
-defineExpose({fitView:frameContent})
+watch(()=>props.renderMode,()=>{const from=environment?.lightingMood();updateEnvironment();const to=environment?.lightingMood();if(from&&to&&!reducedMotion()){lightingTween={start:performance.now(),from,to};environment?.blendLighting(from,to,0);modeTransitionKey.value++}updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})
+onBeforeUnmount(()=>{disposed=true;generation++;if(skyTimer!==undefined)clearTimeout(skyTimer);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.domElement.removeEventListener('pointerdown',cancelCameraTween);renderer?.domElement.removeEventListener('wheel',cancelCameraTween);renderer?.dispose();renderer?.domElement.remove()})
+defineExpose({fitView:()=>frameContent()})
 </script>
-<template><div ref="host" class="model-viewport"><svg class="orientation" viewBox="-45 -45 90 90" aria-hidden="true"><g v-for="axis in orientationAxes" :key="axis.name" :stroke="axis.color" :fill="axis.color"><line x1="0" y1="0" :x2="axis.x" :y2="axis.y" stroke-width="1.6"/><text :x="axis.x * 1.3" :y="axis.y * 1.3 + 4" text-anchor="middle" stroke="none">{{ axis.name }}</text></g></svg><div v-if="!assets.length" class="viewport-empty">{{ t('previewEmpty') }}</div></div></template>
-<style scoped>.orientation{position:absolute;z-index:2;right:12px;top:12px;width:88px;height:88px;pointer-events:none;font-size:11px;font-weight:600}.model-viewport{position:relative;width:100%;height:100%;min-height:220px;overflow:hidden;background:#191b1f}.model-viewport :deep(canvas){display:block;width:100%;height:100%}.viewport-empty{position:absolute;z-index:1;inset:0;display:grid;place-items:center;color:#77838e;font-size:12px;pointer-events:none}</style>
+<template><div ref="host" class="model-viewport"><div v-if="modeTransitionKey" :key="modeTransitionKey" class="viewport-mode-wash" aria-hidden="true"/><svg class="orientation" viewBox="-45 -45 90 90" aria-hidden="true"><g v-for="axis in orientationAxes" :key="axis.name" :stroke="axis.color" :fill="axis.color"><line x1="0" y1="0" :x2="axis.x" :y2="axis.y" stroke-width="1.6"/><text :x="axis.x * 1.3" :y="axis.y * 1.3 + 4" text-anchor="middle" stroke="none">{{ axis.name }}</text></g></svg><div v-if="!assets.length" class="viewport-empty">{{ t('previewEmpty') }}</div></div></template>
+<style scoped>.orientation{position:absolute;z-index:2;right:12px;top:12px;width:88px;height:88px;pointer-events:none;font-size:11px;font-weight:600}.model-viewport{position:relative;width:100%;height:100%;min-height:220px;overflow:hidden;background:#191b1f}.model-viewport :deep(canvas){display:block;width:100%;height:100%}.viewport-mode-wash{position:absolute;z-index:1;inset:0;pointer-events:none;background:#252930;animation:mode-reveal 260ms ease-out both}@keyframes mode-reveal{from{opacity:.22}to{opacity:0}}.viewport-empty{position:absolute;z-index:1;inset:0;display:grid;place-items:center;color:#77838e;font-size:12px;pointer-events:none}@media(prefers-reduced-motion:reduce){.viewport-mode-wash{animation:none;opacity:0}}</style>
