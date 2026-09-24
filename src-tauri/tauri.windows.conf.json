@@ -1,0 +1,17 @@
+{
+  "bundle": {
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "icons/mtrpack.ico": "icons/mtrpack.ico"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["windows/file-icon.wxs"],
+        "componentRefs": ["MtrpackFileIcon"]
+      }
+    }
+  }
+}
