@@ -364,7 +364,7 @@ fn delete_train(state: State<AppState>, train_id: String) -> Result<(), String> 
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn analyze_model_import(path: String, dependency_overrides: std::collections::BTreeMap<String, String>) -> Result<ImportAnalysis, String> {
     let path = Path::new(&path); if !path.is_file() { return Err("Choose an existing model file.".into()); }
     model::analyze(path, &dependency_overrides)
@@ -374,7 +374,7 @@ fn analyze_model_import(path: String, dependency_overrides: std::collections::BT
 #[serde(rename_all = "camelCase")]
 struct ModelImportResult { train: TrainDefinition, asset: AssetDefinition }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_model(state: State<AppState>, train_id: String, carriage_id: String, slot: String, path: String, dependency_overrides: std::collections::BTreeMap<String, String>, expected_revision: Option<u64>) -> Result<ModelImportResult, String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?;
     let session = active.as_mut().ok_or("Open a project before importing a model.")?;
@@ -449,7 +449,7 @@ fn asset_preview(container: &mut Container, asset: &AssetDefinition, bindings: &
     model::to_glb_with_textures(&document, &textures)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_model_preview(state: State<AppState>, asset_id: String, material_bindings: Option<Vec<MaterialBinding>>) -> Result<tauri::ipc::Response, String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
     let asset = read_asset(&mut session.container, &asset_id)?;
@@ -461,14 +461,14 @@ fn get_model_preview(state: State<AppState>, asset_id: String, material_bindings
     };
     Ok(tauri::ipc::Response::new(bytes))
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn get_model_materials(state: State<AppState>, asset_id: String) -> Result<Vec<model::ModelMaterial>, String> {
     let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
     let asset = read_asset(&mut session.container, &asset_id)?;
     let document: model::ModelDocument = rmp_serde::from_slice(&session.container.read_blob(&asset.document_hash)?).map_err(|e| e.to_string())?;
     Ok(document.materials)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn store_image_bytes(state: State<AppState>, bytes: Vec<u8>) -> Result<String, String> {
     let bytes = normalize_png(&bytes)?;
     let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
@@ -477,7 +477,7 @@ fn store_image_bytes(state: State<AppState>, bytes: Vec<u8>) -> Result<String, S
     if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
     Ok(hash)
 }
-#[tauri::command]
+#[tauri::command(async)]
 fn import_texture_file(state: State<AppState>, path: String) -> Result<String, String> {
     if fs::metadata(&path).map_err(|e|e.to_string())?.len() > 32 * 1024 * 1024 { return Err("Images must be smaller than 32 MiB.".into()); }
     store_image_bytes(state, fs::read(path).map_err(|e|e.to_string())?)
