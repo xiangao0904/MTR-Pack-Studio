@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
+  <!-- MTR Pack Studio document: folded silver sheet with the shared metro glyph. -->
+  <path d="M25 9h32l18 18v53a7 7 0 0 1-7 7H25a7 7 0 0 1-7-7V16a7 7 0 0 1 7-7Z" fill="#e5e7eb" stroke="#9299a4" stroke-width="1.5"/>
+  <path d="M57 10v12a5 5 0 0 0 5 5h12" fill="#c3c8d0" stroke="#9299a4" stroke-width="1.5" stroke-linejoin="round"/>
+  <g stroke="#3c424d" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 44c0-8 4-12 15-12s15 4 15 12v15c0 5-3 9-9 9H41c-6 0-9-4-9-9V44Z"/>
+    <path d="M37 43c0-3 1-4 4-4h12c3 0 4 1 4 4v9H37v-9ZM38 60h3m12 0h3M40 68l-3 5m17-5 3 5"/>
+    <path d="M43 35h8M47 40v11" stroke-width="1.5"/>
+  </g>
+  <path d="M35 79h24" stroke="#9299a4" stroke-width="2" stroke-linecap="round"/>
+</svg>

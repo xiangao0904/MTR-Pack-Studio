@@ -18,9 +18,9 @@ onBeforeUnmount(() => { sequence++; if (cover.value) URL.revokeObjectURL(cover.v
 <template>
   <span class="project-artwork">
     <img v-if="cover" :src="cover" alt="" />
-    <img v-else class="default-artwork" :src="'/images/train-placeholder.svg'" alt="" />
+    <img v-else class="default-artwork" :src="'/images/mtrpack-file.svg'" alt="" />
   </span>
 </template>
 <style scoped>
-.project-artwork{display:grid;place-items:center;width:100%;height:100%;overflow:hidden;border-radius:inherit;background:radial-gradient(ellipse at 15% 0%,#526b7c,#25333f 65%,#1a242d)}svg{width:100%;height:100%}img{width:100%;height:100%;object-fit:cover}
+.project-artwork{display:grid;place-items:center;width:100%;height:100%;overflow:hidden;border-radius:inherit;background:#24262b}svg{width:100%;height:100%}img{width:100%;height:100%;object-fit:cover}
 </style>
