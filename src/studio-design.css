@@ -16,6 +16,7 @@
   --motion-ease: cubic-bezier(.2,.75,.25,1);
 }
 .studio-shell {color-scheme:dark;font-family:var(--studio-font);background:var(--studio-bg);color:var(--studio-text)}
+.app-shell {overflow:hidden}
 .studio-shell button,.studio-shell input,.studio-shell select,.studio-shell textarea {font-family:inherit}
 .studio-shell :focus-visible {outline:1px solid #c2c7d1;outline-offset:2px}
 .studio-shell ::selection {background:#565c69;color:#fff}
@@ -31,6 +32,12 @@
 .studio-status-enter-active,.studio-status-leave-active {transition:opacity var(--motion-feedback) ease}
 .studio-status-enter-from,.studio-status-leave-to {opacity:0}
 .studio-status-leave-active {position:absolute}
+.project-enter-enter-active,.project-return-enter-active {transition:opacity 210ms ease,transform 210ms var(--motion-ease)}
+.project-enter-leave-active,.project-return-leave-active {transition:opacity 110ms ease,transform 110ms ease}
+.project-enter-enter-from,.project-return-leave-to {opacity:0;transform:translateX(8px)}
+.project-enter-leave-to,.project-return-enter-from {opacity:0;transform:translateX(-8px)}
+.titlebar {transition:height 210ms var(--motion-ease),padding 210ms var(--motion-ease),background-color 210ms ease,border-color 210ms ease}
+.titlebar .brand-mark {transition:width 210ms var(--motion-ease),height 210ms var(--motion-ease),font-size 210ms var(--motion-ease),border-radius 210ms var(--motion-ease)}
 .workspace-titlebar {height:48px;padding:0 16px;gap:12px;background:var(--studio-surface);border-bottom:1px solid var(--studio-border)}
 .workspace-titlebar .brand-mark {width:25px;height:25px;font-size:17px;border-radius:5px;background:#dee1e7;color:#282b31;border-color:#e2e5eb;padding-right:2px;letter-spacing:-1px}
 .workspace-titlebar .brand-name {font:600 13px var(--studio-font);letter-spacing:-.02em}
@@ -61,5 +68,5 @@
 }
 @media(prefers-reduced-motion:reduce) {
  :root {--motion-feedback:0ms;--motion-panel:0ms;--motion-viewport:0ms}
- .studio-shell button,.studio-shell input,.studio-shell select,.studio-shell textarea,.studio-dialog-enter-active,.studio-dialog-leave-active,.studio-dialog-enter-active .work-modal,.studio-dialog-leave-active .work-modal,.studio-dialog-enter-active .create-modal,.studio-dialog-leave-active .create-modal,.studio-status-enter-active,.studio-status-leave-active {transition:none!important}
+ .studio-shell button,.studio-shell input,.studio-shell select,.studio-shell textarea,.studio-dialog-enter-active,.studio-dialog-leave-active,.studio-dialog-enter-active .work-modal,.studio-dialog-leave-active .work-modal,.studio-dialog-enter-active .create-modal,.studio-dialog-leave-active .create-modal,.studio-status-enter-active,.studio-status-leave-active,.project-enter-enter-active,.project-return-enter-active,.project-enter-leave-active,.project-return-leave-active,.titlebar,.titlebar .brand-mark {transition:none!important}
 }
