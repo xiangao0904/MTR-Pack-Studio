@@ -39,8 +39,9 @@
     <path d="m437 463 42-8c3-1 6 1 6 5l20 169c1 4-1 7-5 7l-65 3c-3 0-4-2-4-5V471c0-5 1-7 6-8Z" fill="#202b31"/>
     <path d="m-30 714 177-3v37l-177 1Zm357-8 123-2c23 0 40 4 60 14l107 52 10 50-127-60c-15-7-30-9-50-9H327Z" fill="#414d55"/>
 
-    <!-- One uninterrupted windscreen, one reflection, and four understated lamps. -->
+    <!-- Paired cab windows share a sill, with the far pane narrowed by perspective. -->
     <path d="M631 294c106 2 228 14 274 33 25 10 30 31 41 60 35 94 75 262 95 353 6 29-4 46-29 47l-294 3c-27 0-37-17-43-44l-70-398c-7-33 3-54 26-54Z" fill="#1e282e"/>
+    <path d="M651 344 760 350c6 0 9 3 10 9l57 286c1 5-1 8-6 8l-110-2c-5 0-8-3-9-8l-57-291c-1-5 1-8 6-8Z" fill="#354149"/>
     <path d="m870 355 45 9c5 1 7 4 9 9 28 71 65 217 82 274 2 5 0 7-5 7l-52-3-83-291c-1-4 0-6 4-5Z" fill="#354149"/>
     <g fill="#4a575f">
       <ellipse cx="725" cy="748" rx="17" ry="20"/>
