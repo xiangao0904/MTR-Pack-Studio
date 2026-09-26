@@ -1,0 +1,29 @@
+{
+  "id": "fixture-default-rail",
+  "name": "rail",
+  "sourceFormat": "obj",
+  "sourceHash": "38b0752ee976626afe1f09dca8ed45aec48c8b9567ca7f1406096a8f7afb9f10",
+  "documentHash": "b93f186a5fe857dc6aa1cdfe135a4332e44ee684e3d52948633111a55fb4d396",
+  "previewHash": "c660d4e8b85a275fd163678fa6fd29fdf9913a8c490aa7ca946b6c22b0524128",
+  "dependencies": [
+    {
+      "name": "rail.mtl",
+      "hash": "57c5c74f0fc04739430ca019757ce09d5da62cb0340396c692019eae22dc2621",
+      "mediaType": "model/mtl"
+    },
+    {
+      "name": "rail_base_color.png",
+      "hash": "655a139a8005b34bc68eeb59fbc5fb699f3a6c793bf70282f892dd5fda4fe1d5",
+      "mediaType": "image/png"
+    }
+  ],
+  "parts": [
+    {
+      "id": "part-unnamed_object",
+      "name": "unnamed_object",
+      "triangleCount": 152
+    }
+  ],
+  "warnings": [],
+  "legacyUvCorrection": false
+}

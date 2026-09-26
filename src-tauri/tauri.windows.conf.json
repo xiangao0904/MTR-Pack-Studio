@@ -2,7 +2,8 @@
   "bundle": {
     "icon": ["icons/icon.ico"],
     "resources": {
-      "icons/mtrpack.ico": "icons/mtrpack.ico"
+      "icons/mtrpack.ico": "icons/mtrpack.ico",
+      "../public/models/": "models/"
     },
     "windows": {
       "nsis": {

@@ -232,3 +232,49 @@ fn authored_train_round_trips_and_exports_all_three_formats() {
     for name in ["mtr4-obj","mtr4-mqo","mtr3-nte"] {fs::copy(directory.join(format!("{name}.zip")),output.join(format!("{name}.zip"))).unwrap();}
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn rail_documents_preserve_revision_references_and_reopen() {
+    let root=std::env::temp_dir().join(format!("mtr-rails-{}",Uuid::new_v4())); fs::create_dir_all(&root).unwrap();
+    let path=root.join("rails.mtrpack"); let mut container=Container::create(&path,"Rails").unwrap();
+    let entry=create_rail_into(&mut container,"Track","track").unwrap();
+    let rail=read_rail_document(&mut container,0).unwrap(); assert_eq!(rail.repeat_interval,0.6);
+    assert!(update_rail_into(&mut container,rail.clone(),0).unwrap_err().contains("changed"));
+    let source=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../public/models/rail.obj");
+    let imported=import_rail_model_into(&mut container,&entry.id,&source,&BTreeMap::new(),1).unwrap();
+    assert_eq!(imported.rail.revision,2); assert!(!imported.asset.parts.is_empty());
+    let catalog=asset_catalog(&mut container).unwrap(); assert_eq!(catalog.models[0].references.len(),1);
+    let before=serde_json::to_vec(&container.index).unwrap();
+    assert!(import_rail_model_into(&mut container,&entry.id,&source,&BTreeMap::new(),1).is_err());
+    assert!(import_rail_model_into(&mut container,&entry.id,&root.join("missing.obj"),&BTreeMap::new(),2).is_err());
+    assert_eq!(before,serde_json::to_vec(&container.index).unwrap());
+    let mut invalid=imported.rail.clone(); invalid.models[0].asset_id="missing".into();
+    assert!(update_rail_into(&mut container,invalid,2).is_err());
+    let generation=container.index.generation;
+    container.index.generation=u64::MAX; // Force commit failure after the document append.
+    let before_failed_commit=serde_json::to_vec(&container.index).unwrap();
+    assert!(update_rail_into(&mut container,imported.rail.clone(),2).is_err());
+    assert_eq!(before_failed_commit,serde_json::to_vec(&container.index).unwrap());
+    assert_eq!(read_rail_document(&mut container,0).unwrap(),imported.rail);
+    container.index.generation=generation;
+    container.compact().unwrap(); drop(container);
+    let mut reopened=Container::open(&path).unwrap(); assert_eq!(read_rail_document(&mut reopened,0).unwrap(),imported.rail);
+    assert!(!asset_preview(&mut reopened,&imported.asset,&[]).unwrap().is_empty());
+    drop(reopened);fs::remove_dir_all(root).unwrap();
+}
+
+// Explicit developer utility: regenerate the browser fixture from the bundled model pipeline.
+#[test]
+#[ignore]
+fn generate_default_rail_browser_fixture() {
+    let path=std::env::temp_dir().join(format!("rail-fixture-{}.mtrpack",Uuid::new_v4()));
+    let mut container=Container::create(&path,"Fixture").unwrap();
+    let public=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../public");
+    let mut asset=import_model_asset_into(&mut container,&public.join("models/rail.obj"),&BTreeMap::new()).unwrap();
+    let bytes=asset_preview(&mut container,&asset,&[]).unwrap();
+    asset.id="fixture-default-rail".into();
+    fs::create_dir_all(public.join("fixtures")).unwrap();
+    fs::write(public.join("fixtures/default-rail.glb"),bytes).unwrap();
+    fs::write(public.join("fixtures/default-rail.json"),serde_json::to_vec_pretty(&asset).unwrap()).unwrap();
+    drop(container);fs::remove_file(path).unwrap();
+}

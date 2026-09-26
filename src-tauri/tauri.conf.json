@@ -16,6 +16,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": { "../public/models/": "models/" },
     "fileAssociations": [
       {
         "ext": ["mtrpack"],

@@ -4,6 +4,26 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct RailDefinition {
+    pub id: String,
+    pub revision: u64,
+    pub export_id: String,
+    pub name: String,
+    #[serde(default)] pub description: String,
+    #[serde(default = "default_repeat_interval")] pub repeat_interval: f32,
+    #[serde(default)] pub models: Vec<ModelLayer>,
+}
+
+fn default_repeat_interval() -> f32 { 0.6 }
+
+impl RailDefinition {
+    pub fn new(name: &str, export_id: &str) -> Self {
+        Self { id: Uuid::new_v4().to_string(), revision: 1, export_id: export_id.into(), name: name.into(), description: String::new(), repeat_interval: default_repeat_interval(), models: Vec::new() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TrainDefinition {
     pub id: String,
     pub revision: u64,
