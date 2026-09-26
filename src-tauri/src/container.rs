@@ -64,6 +64,8 @@ pub struct ProjectIndex {
     pub content: Vec<ContentEntry>,
     #[serde(default)]
     pub assets: BTreeMap<String, String>,
+    #[serde(default)]
+    pub texture_names: BTreeMap<String, String>,
     pub blobs: BTreeMap<String, BlobLocation>,
 }
 
@@ -126,6 +128,7 @@ impl Container {
             namespace: crate::domain::slugify(name, "mtr_pack"),
             content: Vec::new(),
             assets: BTreeMap::new(),
+            texture_names: BTreeMap::new(),
             blobs: BTreeMap::new(),
         };
         let mut container = Self {

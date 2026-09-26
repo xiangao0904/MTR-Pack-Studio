@@ -16,6 +16,31 @@ fn valid_png_bytes_are_reused_without_reencoding() {
 }
 
 #[test]
+fn asset_catalog_recovers_model_textures_and_reuses_identical_imports() {
+    let root=std::env::temp_dir().join(format!("mtr-assets-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
+    let mut png=std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(2,3,image::Rgba([20,30,40,255])).write_to(&mut png,image::ImageFormat::Png).unwrap();
+    fs::write(root.join("paint.png"),png.into_inner()).unwrap();
+    fs::write(root.join("body.mtl"),"newmtl paint\nmap_Kd paint.png\n").unwrap();
+    let source=root.join("body.obj");
+    fs::write(&source,"mtllib body.mtl\no shell\nv 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nusemtl paint\nf 1/1 2/2 3/3\n").unwrap();
+    let path=root.join("assets.mtrpack");let mut container=Container::create(&path,"Assets").unwrap();
+    let first=import_model_asset_into(&mut container,&source,&BTreeMap::new()).unwrap();
+    let second=import_model_asset_into(&mut container,&source,&BTreeMap::new()).unwrap();
+    assert_eq!(first.id,second.id);assert_eq!(container.index.assets.len(),1);
+    let mut train=TrainDefinition::new("Train","train");train.carriages[0].body_models.push(new_model_layer(&first));
+    container.index.content.push(ContentEntry{id:train.id.clone(),kind:"train".into(),name:train.name.clone(),file:"train.json".into(),updated_at:0,resources:vec![]});
+    write_train_document(&mut container,0,&train).unwrap();container.commit().unwrap();
+    container.index.texture_names.clear(); // Earlier projects had no explicit texture catalog.
+    let catalog=asset_catalog(&mut container).unwrap();
+    assert_eq!(catalog.models.len(),1);assert_eq!(catalog.models[0].references.len(),1);
+    assert_eq!(catalog.textures.len(),1);assert_eq!((catalog.textures[0].width,catalog.textures[0].height),(2,3));
+    container.commit().unwrap();drop(container);
+    let mut reopened=Container::open(&path).unwrap();assert_eq!(asset_catalog(&mut reopened).unwrap().textures.len(),1);
+    drop(reopened);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn metasequoia_obj_uvs_keep_their_top_left_origin_in_preview() {
     let root=std::env::temp_dir().join(format!("mtr-uv-origin-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
     let path=root.join("model.obj");
