@@ -13,6 +13,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { getModelPreview, getModelAsset, type RailDefinition, type MaterialBinding, type RenderStage } from '../lib/projects'
 import { t } from '../i18n'
+import { ThumbnailRefreshTracker } from '../lib/thumbnail-refresh'
 
 export interface PreviewTransform { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }
 export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; renderStage?: RenderStage; partRenderStages?: Record<string,RenderStage>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
@@ -58,12 +59,14 @@ let selection: THREE.Box3Helper | undefined
 let grid: THREE.GridHelper | undefined
 let generation = 0
 let disposed = false
-let previousKeys = ''
+let hasFramedContent = false
+let activeContentSignature = ''
 let minecraftFramed = false
 let cameraTween: {start: number; fromPosition: THREE.Vector3; toPosition: THREE.Vector3; fromTarget: THREE.Vector3; toTarget: THREE.Vector3; fromHeight: number; toHeight: number} | undefined
 let lightingTween: {start: number; from: PreviewLightingMood; to: PreviewLightingMood} | undefined
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 const requestedThumbnails = new Map<string, string>()
+const thumbnailRefresh = new ThumbnailRefreshTracker()
 let pointerStart = new THREE.Vector2()
 const byteCache = new Map<string, Promise<ArrayBuffer>>()
 const parsedCache = new Map<string, Promise<THREE.Group>>()
@@ -174,6 +177,7 @@ async function rebuild() {
   const previous = content
   if (previous) previewRoot.remove(previous)
   content = group; previewRoot.add(content)
+  activeContentSignature = signature
   environment?.replaceObjects(previous,content,previewRoot)
   if (previous && previous !== content && ![...contentCache.values()].includes(previous)) disposeCachedContent(previous)
   if (cached) { contentCache.delete(signature); contentCache.set(signature,cached) }
@@ -188,9 +192,11 @@ async function rebuild() {
     contentCache.delete(oldest)
     if (stale !== content) disposeCachedContent(stale)
   }
-  const keys = props.assets.map(item => item.key).join('|') + props.guides.map(item => item.key).join('|')
-  if (keys !== previousKeys) { frameContent(false); previousKeys = keys }
-  if (complete) queueThumbnail()
+  if (!hasFramedContent && (props.assets.length || props.guides.length)) {
+    frameContent(false)
+    hasFramedContent = true
+  }
+  if (complete) observeThumbnail()
 }
 async function loadProjectRail(rail: RailDefinition) {
   const root = new THREE.Group()
@@ -367,11 +373,18 @@ function queueThumbnail() {
   if (!carriageId || !signature || signature === props.thumbnailSavedSignature || requestedThumbnails.get(carriageId) === signature || !props.assets.length) return
   thumbnailTimer = window.setTimeout(() => {
     thumbnailTimer = undefined
-    if (disposed || carriageId !== props.thumbnailCarriageId || signature !== props.thumbnailModelSignature) return
+    if (disposed || carriageId !== props.thumbnailCarriageId || signature !== props.thumbnailModelSignature || activeContentSignature !== JSON.stringify([props.assets,props.vehicleLightsOn])) return
     requestedThumbnails.set(carriageId,signature)
     try { captureThumbnail(carriageId,signature) }
     catch(cause) { requestedThumbnails.delete(carriageId);emit('error',cause instanceof Error?cause.message:String(cause)) }
   },900)
+}
+function observeThumbnail() {
+  if (thumbnailTimer !== undefined) window.clearTimeout(thumbnailTimer)
+  thumbnailTimer = undefined
+  if (!thumbnailRefresh.shouldRefresh(props.thumbnailCarriageId,props.thumbnailModelSignature,props.thumbnailSavedSignature)) return
+  if (activeContentSignature !== JSON.stringify([props.assets,props.vehicleLightsOn])) return
+  queueThumbnail()
 }
 function updateEnvironment() {
   lightingTween=undefined
@@ -525,7 +538,7 @@ onMounted(()=>{
   const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();updateAdaptiveWireframe();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild();void rebuildRails()
 })
 watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn]),()=>void rebuild())
-watch(()=>[props.thumbnailCarriageId,props.thumbnailModelSignature,props.thumbnailSavedSignature],queueThumbnail)
+watch(()=>[props.thumbnailCarriageId,props.thumbnailModelSignature,props.thumbnailSavedSignature],observeThumbnail)
 watch(()=>JSON.stringify(props.guides),()=>{rebuildGuides();void rebuildRails()})
 watch(()=>[props.showRails,JSON.stringify(props.previewRail),props.builtInRailId],()=>void rebuildRails())
 watch(()=>props.groundHeight,updateEnvironment)
