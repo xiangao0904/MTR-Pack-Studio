@@ -1,5 +1,6 @@
 // Keep UI copy separate from components for future locale support.
 const en = {
+  previewRailModel: 'Track model', builtInRail: 'Built-in track',
   desktopModelImport: 'Open the desktop app to import your own OBJ, FBX or MQO model.',
   rail: 'Rail', rails: 'Rails', newRail: 'New Rail', createRail: 'Create Rail', railName: 'Rail name', railNamePlaceholder: 'Ballasted track',
   railTypeHint: 'Create track models, textures and repeating segments.', railEditorHint: 'Edit a repeating track segment. One unit equals one metre.',

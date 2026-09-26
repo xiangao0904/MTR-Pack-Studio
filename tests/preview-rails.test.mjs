@@ -57,3 +57,18 @@ test('default rail texture preserves Metasequoia top-left UVs like imported GLB 
     texture.dispose()
   }
 })
+
+
+test('project tracks use their repeat interval and preserve their authored origin', () => {
+  const source = new THREE.Group()
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, .2, .6))
+  mesh.position.set(.4, .3, .1)
+  source.add(mesh)
+  const tracks = repeatRailModel(source, [{z:0,length:6}], 1.25)
+  assert.ok(tracks.children.length > 2)
+  assert.equal(tracks.children[1].position.z - tracks.children[0].position.z, 1.25)
+  assert.equal(tracks.children[0].position.x, 0)
+  assert.equal(tracks.children[0].position.y, 0)
+  assert.equal(tracks.children[0].children[0].position.y, .3)
+  mesh.geometry.dispose(); mesh.material.dispose()
+})

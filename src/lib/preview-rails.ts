@@ -16,14 +16,15 @@ export function railSegmentPositions(guides: RailGuide[], segmentLength: number)
 }
 
 /** The supplied OBJ is a complete two-rail/sleeper section, in metres along Z. */
-export function repeatRailModel(source: THREE.Group, guides: RailGuide[]): THREE.Group {
+export function repeatRailModel(source: THREE.Group, guides: RailGuide[], repeatInterval?: number): THREE.Group {
   const bounds = new THREE.Box3().setFromObject(source)
-  const positions = railSegmentPositions(guides, bounds.max.z - bounds.min.z)
+  const positions = railSegmentPositions(guides, repeatInterval ?? (bounds.max.z - bounds.min.z))
   const group = new THREE.Group()
   group.name = 'Preview tracks'
   for (const z of positions) {
     const segment = source.clone(true)
-    segment.position.set(-(bounds.min.x + bounds.max.x) / 2, -bounds.max.y, z - (bounds.min.z + bounds.max.z) / 2)
+    if (repeatInterval === undefined) segment.position.set(-(bounds.min.x + bounds.max.x) / 2, -bounds.max.y, z - (bounds.min.z + bounds.max.z) / 2)
+    else segment.position.z = z // Project rails retain authored origin and layer offsets.
     group.add(segment)
   }
   return group

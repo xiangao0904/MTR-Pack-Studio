@@ -9,7 +9,7 @@ import ViewportModeControls from './ViewportModeControls.vue'
 import { loadViewportPreferences, type PreviewRenderMode } from '../lib/viewport-settings'
 import { EditorHistory, trainHistorySnapshot } from '../lib/editor-history'
 import { t } from '../i18n'
-import { analyzeModelImport, attachModelAsset, chooseModelDependency, chooseModelFile, chooseTextureFile, deleteAsset, importTextureFile, listAssets, storeImageBytes, getImageAsset, getModelAsset, getTrain, importModel, updateTrain, type AssetCatalog, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition, type ValidationIssue } from '../lib/projects'
+import { getProject, getRail, type RailDefinition, analyzeModelImport, attachModelAsset, chooseModelDependency, chooseModelFile, chooseTextureFile, deleteAsset, importTextureFile, listAssets, storeImageBytes, getImageAsset, getModelAsset, getTrain, importModel, updateTrain, type AssetCatalog, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition, type ValidationIssue } from '../lib/projects'
 import { arrangeConsist, matchesPlacement } from '../lib/train-preview'
 import { SaveQueue } from '../lib/save-queue'
 import { carriageThumbnailSignature } from '../lib/thumbnail-signature'
@@ -27,6 +27,15 @@ const catalog = ref<AssetCatalog>({models:[],textures:[]})
 const assetQuery = ref('')
 const pickerItems = computed(() => (picker.value?.kind==='model' ? catalog.value.models : catalog.value.textures).filter(item=>item.name.toLowerCase().includes(assetQuery.value.toLowerCase())))
 const vehicleLightsOn = ref(true)
+const projectRails = ref<RailDefinition[]>([])
+const railModelId = ref(localStorage.getItem(`mtr-pack-studio:rail-preview:${props.projectPath}`) || '')
+const previewRail = computed(() => projectRails.value.find(rail => rail.id === railModelId.value))
+watch(railModelId, value => localStorage.setItem(`mtr-pack-studio:rail-preview:${props.projectPath}`, value))
+async function loadProjectRails() {
+  const project = await getProject(props.projectPath)
+  projectRails.value = await Promise.all(project.content.filter(entry => entry.kind === 'rail').map(entry => getRail(props.projectPath, entry.id)))
+  if (railModelId.value && !projectRails.value.some(rail => rail.id === railModelId.value)) railModelId.value = ''
+}
 const showRails = ref(localStorage.getItem('mtr-pack-studio:show-rails') === 'true')
 watch(showRails, value => localStorage.setItem('mtr-pack-studio:show-rails', String(value)))
 const renderStages: { value: RenderStage; label: ReturnType<typeof t> }[] = [
@@ -108,7 +117,7 @@ const placementRule = computed<CarPlacementRule | undefined>(() => !carriage.val
 async function load() {
   try {
     hydrating=true;train.value=await getTrain(props.projectPath,props.entry.id);selectedCarriageId.value=train.value.carriages[0]?.id||''
-    await loadAssets();history.reset(train.value);historyTick.value++;await nextTick();emit('status','saved');emit('ready')
+    await loadProjectRails();await loadAssets();history.reset(train.value);historyTick.value++;await nextTick();emit('status','saved');emit('ready')
   } catch(cause){emit('error',message(cause));emit('status','failed')}
   finally{hydrating=false;loading.value=false}
 }
@@ -267,7 +276,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
       <div class="tool-group history-tools"><button :disabled="!canUndo" :title="`${t('undo')} (Ctrl+Z)`" @click="travelHistory('undo')"><Undo2 :size="17" /><span>{{ t('undo') }}</span></button><button :disabled="!canRedo" :title="`${t('redo')} (Ctrl+Shift+Z)`" @click="travelHistory('redo')"><Redo2 :size="17" /><span>{{ t('redo') }}</span></button></div>
 
       <div class="tool-group view-tools"><label class="camera-picker"><Box :size="17" /><select v-model="cameraView" :aria-label="t('perspective')"><option v-for="view in (['perspective','front','back','left','right','top'] as const)" :key="view" :value="view">{{ t(view==='back'?'viewBack':view) }}</option></select></label><button :class="{active:showGrid}" @click="showGrid=!showGrid"><Grid3X3 :size="17" /><span>{{ t('grid') }}</span></button><button :class="{active:showRails}" :aria-pressed="showRails" @click="showRails=!showRails"><TrainTrack :size="17" /><span>{{ t('showRails') }}</span></button><button :class="{active:wireframe}" @click="wireframe=!wireframe"><BoxSelect :size="17" /><span>{{ t('wireframe') }}</span></button><button @click="viewport?.fitView()"><Maximize :size="17" /><span>{{ t('fitView') }}</span></button></div>
-      <ViewportModeControls v-model:mode="renderMode" v-model:settings="viewportSettings[renderMode]" v-model:show-grid="showGrid" v-model:wireframe="wireframe" />
+      <ViewportModeControls :rail-options="projectRails" v-model:rail-model-id="railModelId" v-model:show-rails="showRails" v-model:mode="renderMode" v-model:settings="viewportSettings[renderMode]" v-model:show-grid="showGrid" v-model:wireframe="wireframe" />
       <div class="tool-spacer" /><button class="editor-export" @click="emit('export')"><Upload :size="18" />{{ t('exportPack') }}</button>
     </header>
     <div class="editor-body">
@@ -284,7 +293,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
       </aside>
 
       <main :class="['editor-center',{'with-consist':showConsist}]">
-        <section class="viewport-panel"><ModelViewport ref="viewport" :assets="viewportAssets" :guides="viewportGuides" :selected-part="selectedPartId" :selected-layer="selectedLayerId" :selected-instance-key="selectedInstanceKey" :render-mode="renderMode" :settings="viewportSettings[renderMode]" :camera-view="cameraView" :show-rails="showRails" :show-grid="showGrid" :wireframe="wireframe" :vehicle-lights-on="vehicleLightsOn" :thumbnail-carriage-id="viewMode==='single' && !simulateRules && !importing ? selectedCarriageId : undefined" :thumbnail-model-signature="thumbnailModelSignature" :thumbnail-saved-signature="carriage?.thumbnailModelSignature" @select="selection=>selectPart(selection.partId,selection.layerId,selection.carriageId,selection.instanceKey)" @clear-selection="clearSelection" @error="emit('error',$event)" @thumbnail="onThumbnail" /><div v-if="renderMode==='minecraft'" :class="['environment-caption',{'with-warning':selectedAsset?.warnings.length}]" :title="t('minecraftPreviewHint')">{{ t('minecraftScale') }}</div><div class="viewport-badge"><Box :size="14" />{{ carriage?.name }} · {{ carriage?.length }} × {{ carriage?.width }} m</div><div v-if="selectedAsset?.warnings.length" class="model-warning"><AlertTriangle :size="15" />{{ selectedAsset.warnings.join(' ') }}</div></section>
+        <section class="viewport-panel"><ModelViewport ref="viewport" :assets="viewportAssets" :guides="viewportGuides" :selected-part="selectedPartId" :selected-layer="selectedLayerId" :selected-instance-key="selectedInstanceKey" :render-mode="renderMode" :settings="viewportSettings[renderMode]" :camera-view="cameraView" :show-rails="showRails" :preview-rail="previewRail" :show-grid="showGrid" :wireframe="wireframe" :vehicle-lights-on="vehicleLightsOn" :thumbnail-carriage-id="viewMode==='single' && !simulateRules && !importing ? selectedCarriageId : undefined" :thumbnail-model-signature="thumbnailModelSignature" :thumbnail-saved-signature="carriage?.thumbnailModelSignature" @select="selection=>selectPart(selection.partId,selection.layerId,selection.carriageId,selection.instanceKey)" @clear-selection="clearSelection" @error="emit('error',$event)" @thumbnail="onThumbnail" /><div v-if="renderMode==='minecraft'" :class="['environment-caption',{'with-warning':selectedAsset?.warnings.length}]" :title="t('minecraftPreviewHint')">{{ t('minecraftScale') }}</div><div class="viewport-badge"><Box :size="14" />{{ carriage?.name }} · {{ carriage?.length }} × {{ carriage?.width }} m</div><div v-if="selectedAsset?.warnings.length" class="model-warning"><AlertTriangle :size="15" />{{ selectedAsset.warnings.join(' ') }}</div></section>
         <section v-if="showConsist" class="consist-panel"><div class="consist-heading"><select v-model="viewMode" :aria-label="t('previewConsist')"><option value="single">{{ t('singleCarriage') }}</option><option value="consist">{{ t('previewConsist') }}</option></select><button :class="{active:simulateRules}" @click="simulateRules=!simulateRules">{{ t('simulateRules') }}</button><button @click="addInstance"><Plus :size="13" />{{ t('addSelectedCarriage') }}</button><span class="tool-spacer" /><button :disabled="!train.previewConsist[selectedInstance]" :title="t('reverseCarriage')" @click="reverseInstance"><RotateCw :size="14" /></button><button :disabled="selectedInstance===0" :title="t('moveUp')" @click="moveInstance(selectedInstance,selectedInstance-1)"><ArrowLeft :size="14" /></button><button :disabled="selectedInstance>=train.previewConsist.length-1" :title="t('moveDown')" @click="moveInstance(selectedInstance,selectedInstance+1)"><ChevronRight :size="14" /></button><button :disabled="!train.previewConsist.length" :title="t('delete')" @click="removeInstance"><Trash2 :size="14" /></button></div><TransitionGroup name="consist-order" tag="div" class="consist-items"><button v-for="(instance,index) in train.previewConsist" :key="consistKey(instance)" draggable="true" :class="{active:selectedInstance===index}" @dragstart="dragIndex=index" @dragover.prevent @drop.prevent="dropInstance(index)" @click="selectedInstance=index;selectedCarriageId=instance.carriageId"><span>{{ index+1 }}</span>{{ train.carriages.find(item=>item.id===instance.carriageId)?.name }}<span>{{ instance.reversed ? '←' : '→' }}</span></button><small v-if="!train.previewConsist.length" key="empty">{{ t('emptyConsist') }}</small></TransitionGroup></section>
         <section class="hierarchy-panel">
           <div class="hierarchy-tabs"><button :class="{active:showConsist}" @click="showConsist=!showConsist">{{ t('showConsist') }}</button><button :class="{active:treeTab==='model'}" @click="treeTab='model'">{{ t('modelTree') }}</button><button :class="{active:treeTab==='materials'}" @click="treeTab='materials'">{{ t('materials') }}</button></div>

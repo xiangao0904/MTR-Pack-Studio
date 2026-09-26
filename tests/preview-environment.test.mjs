@@ -143,3 +143,27 @@ test('explicit rail floor height positions Minecraft blocks and restores the ord
   assert.ok(Math.abs(ground.position.y+.5+1.02)<1e-10)
   f.dispose()
 })
+
+
+test('adding and removing track scenery preserves the scene floor height', () => {
+  const f = fixture()
+  const track = new THREE.Mesh(new THREE.BoxGeometry(3, .3, 30), new THREE.MeshStandardMaterial())
+  track.position.y = -.15
+  const floorY = () => {
+    let value
+    f.scene.traverse(object => {
+      if (object instanceof THREE.Mesh && Array.isArray(object.material) && object.material.length === 6) value = object.position.y + object.geometry.parameters.height / 2
+    })
+    return value
+  }
+  f.environment.apply(f.root, 'minecraft')
+  const baseline = floorY()
+  f.root.add(track)
+  f.environment.apply(f.root, 'minecraft')
+  assert.equal(floorY(), baseline)
+  f.environment.restoreMaterials()
+  f.root.remove(track)
+  f.environment.apply(f.root, 'minecraft')
+  assert.equal(floorY(), baseline)
+  track.geometry.dispose(); track.material.dispose(); f.dispose()
+})
