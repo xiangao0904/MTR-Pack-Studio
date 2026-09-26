@@ -131,3 +131,15 @@ test('slider updates keep model materials, ground, clouds and shadow targets ali
   assert.equal(f.scene.getObjectByName('Minecraft block clouds'),undefined)
   f.environment.dispose();f.dispose()
 })
+
+test('explicit rail floor height positions Minecraft blocks and restores the ordinary floor default',()=>{
+  const f=fixture()
+  f.environment.apply(f.root,'minecraft',undefined,-.27017)
+  let ground
+  f.scene.traverse(object=>{if(object instanceof THREE.Mesh&&Array.isArray(object.material)&&object.material.length===6)ground=object})
+  assert.ok(Math.abs(ground.position.y+.5+.27017)<1e-10)
+  f.environment.apply(f.root,'minecraft')
+  f.scene.traverse(object=>{if(object instanceof THREE.Mesh&&Array.isArray(object.material)&&object.material.length===6)ground=object})
+  assert.ok(Math.abs(ground.position.y+.5+1.02)<1e-10)
+  f.dispose()
+})

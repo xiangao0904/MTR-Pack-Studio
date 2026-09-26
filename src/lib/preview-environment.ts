@@ -24,6 +24,7 @@ export class PreviewEnvironment {
   private geometry = new Set<THREE.BufferGeometry>()
   private lights: THREE.DirectionalLight[] = []
   private bounds = new THREE.Box3()
+  private groundY = PREVIEW_GROUND_Y
   private mode: PreviewRenderMode = 'studio'
   private clouds?: THREE.InstancedMesh
   private settings = normalizeViewportSettings('studio',undefined)
@@ -50,7 +51,8 @@ export class PreviewEnvironment {
     for (const geometry of this.geometry) geometry.dispose()
     this.geometry.clear();this.scenery.traverse(object=>{if(object instanceof THREE.InstancedMesh)object.dispose()});this.scenery.clear();this.clouds=undefined
   }
-  apply(root: THREE.Object3D | undefined, mode: PreviewRenderMode, settings?: ViewportSettings) {
+  apply(root: THREE.Object3D | undefined, mode: PreviewRenderMode, settings?: ViewportSettings, groundY = PREVIEW_GROUND_Y) {
+    this.groundY = groundY
     this.restoreMaterials();this.clearScenery();this.mode=mode;this.settings=normalizeViewportSettings(mode,settings)
     this.bounds.makeEmpty();root?.updateWorldMatrix(true,true)
     root?.traverse(object=>{if(object instanceof THREE.Mesh && visible(object)) {if(!object.geometry.boundingBox)object.geometry.computeBoundingBox();if(object.geometry.boundingBox)this.bounds.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld))}})
@@ -116,7 +118,7 @@ export class PreviewEnvironment {
   private lightDirection() { return previewLightDirection(this.settings) }
   private fitShadow(light: THREE.DirectionalLight,direction: THREE.Vector3) {
     const points=corners(this.bounds)
-    const groundY=this.mode==='minecraft'||(this.mode==='material'&&this.settings.ground)?PREVIEW_GROUND_Y:GROUND_Y
+    const groundY=this.mode==='minecraft'||(this.mode==='material'&&this.settings.ground)?this.groundY:GROUND_Y
     for(const point of [...points]) {const distance=Math.max(0,(point.y-groundY)/direction.y);points.push(point.clone().addScaledVector(direction,-distance))}
     this.scenery.updateWorldMatrix(true,true);light.shadow.updateMatrices(light)
     const local=new THREE.Box3().setFromPoints(points.map(point=>point.applyMatrix4(light.shadow.camera.matrixWorldInverse)))
@@ -136,7 +138,7 @@ export class PreviewEnvironment {
   private createNeutralGround(center:THREE.Vector3,size:number) {
     const geometry=new THREE.PlaneGeometry(size,size);this.geometry.add(geometry)
     const ground=new THREE.Mesh(geometry,this.registerMaterial(new THREE.MeshStandardMaterial({color:0x777e86,roughness:.94,metalness:0})))
-    ground.rotation.x=-Math.PI/2;ground.position.set(Math.round(center.x),PREVIEW_GROUND_Y,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
+    ground.rotation.x=-Math.PI/2;ground.position.set(Math.round(center.x),this.groundY,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
   }
   private pixelTexture(kind:'grass'|'side'|'dirt') {
     const data=new Uint8Array(16*16*4)
@@ -150,7 +152,7 @@ export class PreviewEnvironment {
       const make=(map:THREE.Texture)=>this.registerMaterial(new THREE.MeshStandardMaterial({map,roughness:1,metalness:0}))
       const geometry=new THREE.BoxGeometry(size,1,size);this.geometry.add(geometry)
       const ground=new THREE.Mesh(geometry,[make(side),make(side),make(top),make(bottom),make(side),make(side)])
-      ground.position.set(Math.round(center.x),PREVIEW_GROUND_Y-.5,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
+      ground.position.set(Math.round(center.x),this.groundY-.5,Math.round(center.z));ground.receiveShadow=true;this.scenery.add(ground)
     }
 
     // Vanilla-style flat voxel clouds: one instanced draw instead of many cloud meshes.

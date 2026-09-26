@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
+import { loadPreviewRail, repeatRailModel } from '../lib/preview-rails'
 import { PreviewRenderer, filterModelTextures, prepareMaterialTextures } from '../lib/preview-renderer'
 import { PreviewEnvironment, type PreviewLightingMood } from '../lib/preview-environment'
 import type { PreviewRenderMode, ViewportSettings } from '../lib/viewport-settings'
@@ -14,7 +15,7 @@ import { t } from '../i18n'
 export interface PreviewTransform { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }
 export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; renderStage?: RenderStage; partRenderStages?: Record<string,RenderStage>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
 export interface PreviewGuide { key: string; length: number; width: number; z: number; reversed: boolean }
-const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; vehicleLightsOn?: boolean; thumbnailCarriageId?: string; thumbnailModelSignature?: string; thumbnailSavedSignature?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, vehicleLightsOn: true, renderMode: 'studio' })
+const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; groundHeight?: number; showRails?: boolean; showGrid?: boolean; wireframe?: boolean; vehicleLightsOn?: boolean; thumbnailCarriageId?: string; thumbnailModelSignature?: string; thumbnailSavedSignature?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showRails: false, showGrid: true, wireframe: false, vehicleLightsOn: true, renderMode: 'studio' })
 const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, signature: string, bytes: Uint8Array] }>()
 const host = ref<HTMLDivElement>()
 const modeTransitionKey = ref(0)
@@ -43,6 +44,10 @@ let perspectivePose: {position: THREE.Vector3; target: THREE.Vector3; zoom: numb
 let controls: OrbitControls | undefined
 let resize: ResizeObserver | undefined
 let frame = 0
+const previewRoot = new THREE.Group()
+let railSource: THREE.Group | undefined
+let railLoading: Promise<void> | undefined
+let rails: THREE.Group | undefined
 let content: THREE.Group | undefined
 let guides: THREE.Group | undefined
 let selection: THREE.Box3Helper | undefined
@@ -144,8 +149,8 @@ async function rebuild() {
   pipeline?.clearMaterials()
   environment?.restoreMaterials()
   selectedObject = undefined
-  if (content) { scene.remove(content); disposeObject(content) }
-  content = group; scene.add(content); updateEnvironment(); rebuildGuides(); updateSelection()
+  if (content) { previewRoot.remove(content); disposeObject(content) }
+  content = group; previewRoot.add(content); updateEnvironment(); rebuildGuides(); updateSelection()
   const keys = props.assets.map(item => item.key).join('|') + props.guides.map(item => item.key).join('|')
   if (keys !== previousKeys) { frameContent(false); previousKeys = keys }
   const carriageId=props.thumbnailCarriageId,signature=props.thumbnailModelSignature
@@ -153,6 +158,26 @@ async function rebuild() {
     requestedThumbnails.set(carriageId,signature)
     try { captureThumbnail(carriageId,signature) } catch(cause) { requestedThumbnails.delete(carriageId);emit('error',cause instanceof Error?cause.message:String(cause)) }
   }
+}
+async function rebuildRails() {
+  if (!scene || disposed) return
+  if (props.showRails && !railSource) {
+    if (!railLoading) railLoading = loadPreviewRail().then(source => {
+      if (disposed) disposeObject(source)
+      else railSource = source
+    }).catch(() => { if (!disposed) emit('error', t('railPreviewLoadFailed')) }).finally(() => { railLoading = undefined })
+    await railLoading
+    if (disposed || !railSource) return
+  }
+  // Restore before detaching: environment owns material clones for both train and rails.
+  pipeline?.clearMaterials()
+  environment?.restoreMaterials()
+  if (rails) { previewRoot.remove(rails); rails = undefined }
+  if (props.showRails && railSource) {
+    try { rails = repeatRailModel(railSource, props.guides); previewRoot.add(rails) }
+    catch { emit('error', t('railPreviewLoadFailed')) }
+  }
+  updateEnvironment()
 }
 function rebuildGuides() {
   if (!scene) return
@@ -266,9 +291,11 @@ function updateEnvironment() {
   const settings = normalizeViewportSettings(props.renderMode, props.settings)
   activeSettings=settings
   if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings), environmentMap.background)
-  environment?.apply(content, props.renderMode, settings)
+  const railBounds = rails && railSource ? new THREE.Box3().setFromObject(railSource) : undefined
+  const groundHeight = props.groundHeight ?? (railBounds ? railBounds.min.y - railBounds.max.y - .005 : undefined)
+  environment?.apply(previewRoot, props.renderMode, settings, groundHeight)
   pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity)
-  if(content && renderer)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
+  if(renderer)filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe)
   if (renderer) { renderer.shadowMap.enabled = true; renderer.shadowMap.needsUpdate = true }
 }
@@ -279,7 +306,7 @@ function updateViewportSettings() {
   if(!environment.updateSettings(props.renderMode,settings)) {updateEnvironment();return}
   const previous=activeSettings
   activeSettings=settings
-  if(previous?.pixelTextures!==settings.pixelTextures && content)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),settings.pixelTextures)
+  if(previous?.pixelTextures!==settings.pixelTextures)filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),settings.pixelTextures)
   pipeline?.setAO(settings.ambientOcclusion && !props.wireframe)
   pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity)
   if(!previous || previous.lightAzimuth!==settings.lightAzimuth || previous.lightElevation!==settings.lightElevation || previous.lightSize!==settings.lightSize || previous.shadowQuality!==settings.shadowQuality)renderer.shadowMap.needsUpdate=true
@@ -342,7 +369,7 @@ function click(event: MouseEvent) {
 }
 onMounted(()=>{
   if(!host.value)return
-  scene=new THREE.Scene();scene.background=new THREE.Color(0x191b1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,4,12)
+  scene=new THREE.Scene();scene.add(previewRoot);scene.background=new THREE.Color(0x191b1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,4,12)
   try { renderer=new THREE.WebGLRenderer({antialias:true}) } catch(cause) { emit('error',String(cause)); return }
   renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.BasicShadowMap;renderer.shadowMap.autoUpdate=false;host.value.append(renderer.domElement)
   pipeline=new PreviewRenderer(renderer,scene,camera)
@@ -352,17 +379,19 @@ onMounted(()=>{
   grid=new THREE.GridHelper(100,100,0x42454b,0x26292e);grid.visible=props.showGrid;scene.add(grid)
   renderer.domElement.addEventListener('click',click);renderer.domElement.addEventListener('pointerdown',pointerDown);renderer.domElement.addEventListener('pointerdown',cancelCameraTween);renderer.domElement.addEventListener('wheel',cancelCameraTween)
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
-  const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild()
+  const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild();void rebuildRails()
 })
 watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
-watch(()=>JSON.stringify(props.guides),rebuildGuides)
+watch(()=>JSON.stringify(props.guides),()=>{rebuildGuides();void rebuildRails()})
+watch(()=>props.showRails,()=>void rebuildRails())
+watch(()=>props.groundHeight,updateEnvironment)
 watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],updateSelection)
 watch(()=>props.cameraView,changeCamera)
 watch(()=>props.showGrid,value=>{if(grid)grid.visible=value})
 watch(()=>props.wireframe,updateWireframe)
 watch(()=>props.settings,updateViewportSettings,{deep:true})
 watch(()=>props.renderMode,()=>{const from=environment?.lightingMood();updateEnvironment();const to=environment?.lightingMood();if(from&&to&&!reducedMotion()){lightingTween={start:performance.now(),from,to};environment?.blendLighting(from,to,0);modeTransitionKey.value++}updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})
-onBeforeUnmount(()=>{disposed=true;generation++;if(skyTimer!==undefined)clearTimeout(skyTimer);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(scene)disposeObject(scene);byteCache.clear();renderer?.domElement.removeEventListener('pointerdown',cancelCameraTween);renderer?.domElement.removeEventListener('wheel',cancelCameraTween);renderer?.dispose();renderer?.domElement.remove()})
+onBeforeUnmount(()=>{disposed=true;generation++;if(skyTimer!==undefined)clearTimeout(skyTimer);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(rails)previewRoot.remove(rails);if(railSource)disposeObject(railSource);if(scene)disposeObject(scene);byteCache.clear();renderer?.domElement.removeEventListener('pointerdown',cancelCameraTween);renderer?.domElement.removeEventListener('wheel',cancelCameraTween);renderer?.dispose();renderer?.domElement.remove()})
 defineExpose({fitView:()=>frameContent()})
 </script>
 <template><div ref="host" class="model-viewport"><div v-if="modeTransitionKey" :key="modeTransitionKey" class="viewport-mode-wash" aria-hidden="true"/><svg class="orientation" viewBox="-45 -45 90 90" aria-hidden="true"><g v-for="axis in orientationAxes" :key="axis.name" :stroke="axis.color" :fill="axis.color"><line x1="0" y1="0" :x2="axis.x" :y2="axis.y" stroke-width="1.6"/><text :x="axis.x * 1.3" :y="axis.y * 1.3 + 4" text-anchor="middle" stroke="none">{{ axis.name }}</text></g></svg><div v-if="!assets.length" class="viewport-empty">{{ t('previewEmpty') }}</div></div></template>
