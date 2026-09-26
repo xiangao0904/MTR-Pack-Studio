@@ -4,10 +4,8 @@ import { Settings2 } from '@lucide/vue'
 import { t } from '../i18n'
 import { defaultViewportSettings, renderModes, type PreviewRenderMode, type ViewportSettings } from '../lib/viewport-settings'
 
-const props = defineProps<{ mode: PreviewRenderMode; settings: ViewportSettings; showGrid: boolean; wireframe: boolean; railOptions?: {id:string;name:string}[]; railModelId?:string; showRails?:boolean }>()
+const props = defineProps<{ mode: PreviewRenderMode; settings: ViewportSettings; showGrid: boolean; wireframe: boolean }>()
 const emit = defineEmits<{
-  'update:railModelId': [value: string]
-  'update:showRails': [value: boolean]
   'update:mode': [mode: PreviewRenderMode]
   'update:settings': [settings: ViewportSettings]
   'update:showGrid': [value: boolean]
@@ -126,25 +124,10 @@ onBeforeUnmount(() => {
     <Teleport to="body">
     <Transition name="viewport-popover"><section v-if="open" :id="`${id}-settings`" ref="panel" class="settings-panel" :style="panelPosition" role="dialog" :aria-label="t('viewportSettings')" @focusout="focusOut">
       <header>{{ label(mode) }}<span>{{ t('viewportSettings') }}</span></header>
-      <div class="toggle-row"><label><input type="checkbox" :checked="showGrid" @change="emit('update:showGrid', ($event.target as HTMLInputElement).checked)">{{ t('grid') }}</label><label><input type="checkbox" :checked="wireframe" @change="emit('update:wireframe', ($event.target as HTMLInputElement).checked)">{{ t('wireframe') }}</label></div>
-      <template v-if="railOptions">
-        <label class="ground-toggle"><input type="checkbox" :checked="showRails" @change="emit('update:showRails', ($event.target as HTMLInputElement).checked)">{{ t('showRails') }}</label>
-        <label class="quality-row"><span>{{ t('previewRailModel') }}</span><select :value="railModelId || ''" @change="emit('update:railModelId', ($event.target as HTMLSelectElement).value)"><option value="">{{ t('builtInRail') }}</option><option v-for="rail in railOptions" :key="rail.id" :value="rail.id">{{ rail.name }}</option></select></label>
-      </template>
-      <template v-if="mode === 'minecraft'">
-        <label class="slider-row"><span>{{ t('cloudCover') }}<output>{{ Math.round(settings.cloudCover * 100) }}%</output></span><input type="range" min="0" max="1" step="0.05" :aria-label="t('cloudCover')" :value="settings.cloudCover" @input="slider($event, 'cloudCover')"></label>
-        <label class="slider-row"><span>{{ t('skyHaze') }}<output>{{ Math.round(settings.skyHaze * 100) }}%</output></span><input type="range" min="0" max="1" step="0.05" :aria-label="t('skyHaze')" :value="settings.skyHaze" @input="slider($event, 'skyHaze')"></label>
-      </template>
-      <label class="ground-toggle"><input type="checkbox" :checked="settings.ambientOcclusion" @change="update('ambientOcclusion', ($event.target as HTMLInputElement).checked)">{{ t('ambientOcclusion') }}</label>
-      <label class="ground-toggle"><input type="checkbox" :checked="settings.pixelTextures" @change="update('pixelTextures', ($event.target as HTMLInputElement).checked)">{{ t('pixelTextures') }}</label>
-        <label class="quality-row"><span>{{ t('shadowQuality') }}</span><select :value="settings.shadowQuality" @change="update('shadowQuality', ($event.target as HTMLSelectElement).value as ViewportSettings['shadowQuality'])"><option value="standard">{{ t('qualityStandard') }}</option><option value="high">{{ t('qualityHigh') }}</option></select></label>
         <label class="slider-row"><span>{{ t('lightAzimuth') }}<output>{{ settings.lightAzimuth }}°</output></span><input type="range" min="0" max="360" step="1" :aria-label="t('lightAzimuth')" :value="settings.lightAzimuth" @input="slider($event, 'lightAzimuth')"></label>
         <label class="slider-row"><span>{{ t('lightElevation') }}<output>{{ settings.lightElevation }}°</output></span><input type="range" min="10" max="85" step="1" :aria-label="t('lightElevation')" :value="settings.lightElevation" @input="slider($event, 'lightElevation')"></label>
         <label class="slider-row"><span>{{ t('lightIntensity') }}<output>{{ settings.lightIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="8" step="0.1" :aria-label="t('lightIntensity')" :value="settings.lightIntensity" @input="slider($event, 'lightIntensity')"></label>
         <label class="slider-row"><span>{{ t('environmentIntensity') }}<output>{{ settings.environmentIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="3" step="0.1" :aria-label="t('environmentIntensity')" :value="settings.environmentIntensity" @input="slider($event, 'environmentIntensity')"></label>
-        <label class="slider-row"><span>{{ t('lightSize') }}<output>{{ settings.lightSize.toFixed(1) }}°</output></span><input type="range" min="0.1" max="30" step="0.1" :aria-label="t('lightSize')" :value="settings.lightSize" @input="slider($event, 'lightSize')"></label>
-        <label class="slider-row"><span>{{ t('indirectIntensity') }}<output>{{ settings.indirectIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="2" step="0.1" :aria-label="t('indirectIntensity')" :value="settings.indirectIntensity" @input="slider($event, 'indirectIntensity')"></label>
-        <label v-if="mode === 'material'" class="ground-toggle"><input type="checkbox" :checked="settings.ground" @change="update('ground', ($event.target as HTMLInputElement).checked)">{{ t('ground') }}</label>
       <button type="button" class="reset-button" @click="reset">{{ t('resetViewportSettings') }}</button>
     </section></Transition>
     </Teleport>
