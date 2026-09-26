@@ -407,7 +407,7 @@ fn import_model_into(container: &mut Container, train_id: &str, carriage_id: &st
     let preview = asset_preview(container, &asset, &[])?;
     asset.preview_hash = container.put_blob(&preview, "model/gltf-binary")?;
     let asset_hash = container.put_blob(&serde_json::to_vec(&asset).map_err(|e| e.to_string())?, "application/vnd.mtrpack.asset+json")?; container.index.assets.insert(asset_id.clone(), asset_hash);
-    let layer = ModelLayer { id: Uuid::new_v4().to_string(), name: asset.name.clone(), asset_id, flip_texture_v: false, visible: true, material_bindings: Vec::new(), part_rules: Default::default(), hidden_parts: Vec::new(), transform: Default::default(), part_transforms: Default::default() };
+    let layer = ModelLayer { id: Uuid::new_v4().to_string(), name: asset.name.clone(), asset_id, flip_texture_v: false, visible: true, material_bindings: Vec::new(), part_rules: Default::default(), hidden_parts: Vec::new(), transform: Default::default(), part_transforms: Default::default(), render_stage: Default::default(), part_render_stages: Default::default() };
     let carriage = train.carriages.iter_mut().find(|item| item.id == carriage_id).ok_or_else(|| "The selected carriage no longer exists.".to_string())?;
     match slot { "body" => carriage.body_models.push(layer), "bogie1" => carriage.bogie_1_models.push(layer), "bogie2" => carriage.bogie_2_models.push(layer), _ => { return Err("Choose a valid carriage model slot.".into()); } }
     train.revision += 1; write_train_document(container, entry_index, &train)?;

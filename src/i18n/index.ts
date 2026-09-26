@@ -43,6 +43,7 @@ const en = {
   undo: 'Undo', redo: 'Redo', select: 'Select', move: 'Move', rotate: 'Rotate', scale: 'Scale', grid: 'Grid', wireframe: 'Wireframe', fitView: 'Fit View',
   searchCarriages: 'Search carriages...', add: 'Add', moveUp: 'Move up', moveDown: 'Move down', duplicate: 'Duplicate', delete: 'Delete',
   modelTree: 'Model Tree', materials: 'Materials', searchParts: 'Search parts...', visible: 'Visible', carriage: 'Carriage', modelLayer: 'Model layer', selectModelLayer: 'Select a model layer to inspect its resources.', dependencies: 'dependencies',
+  renderStage: 'Render stage', inheritRenderStage: 'Use model stage', stageExterior: 'Exterior', stageInterior: 'Interior lighting', stageInteriorTranslucent: 'Translucent interior', stageLight: 'Vehicle lights', stageAlwaysOnLight: 'Always-on light', vehicleLights: 'Vehicle lights on', renderStageHint: 'Set a model stage, then override individual parts when needed. The preview approximates game lighting.',
   modelLayers: 'model layers', triangles: 'triangles', unitsMetres: 'Units: metres', forward: 'forward', gridSize: 'Grid: 1 m', train: 'Train', selectedCarriage: 'Selected carriage',
   fieldName: 'Name',
   body: 'Body Model', frontBogie: 'Front Bogie', rearBogie: 'Rear Bogie', import: 'Import', addLayer: 'Add layer', noModelAssigned: 'No model assigned', flipV: 'V Flip', materialBindings: 'Material Bindings', mtr3Short: 'MTR 3',

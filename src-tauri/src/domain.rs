@@ -59,6 +59,21 @@ pub struct ModelLayer {
     #[serde(default)] pub hidden_parts: Vec<String>,
     #[serde(default)] pub transform: ModelTransform,
     #[serde(default)] pub part_transforms: BTreeMap<String, ModelTransform>,
+    #[serde(default)] pub render_stage: RenderStage,
+    #[serde(default)] pub part_render_stages: BTreeMap<String, RenderStage>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RenderStage { #[default] Exterior, Interior, InteriorTranslucent, Light, AlwaysOnLight }
+
+impl RenderStage {
+    pub fn mtr4(self) -> &'static str { match self { Self::Exterior => "EXTERIOR", Self::Interior => "INTERIOR", Self::InteriorTranslucent => "INTERIOR_TRANSLUCENT", Self::Light => "LIGHT", Self::AlwaysOnLight => "ALWAYS_ON_LIGHT" } }
+    pub fn mtr3(self) -> &'static str { match self { Self::Exterior => "exterior", Self::Interior => "interior", Self::InteriorTranslucent => "interior_translucent", Self::Light => "lights", Self::AlwaysOnLight => "always_on_lights" } }
+}
+
+impl ModelLayer {
+    pub fn render_stage_for(&self, part_id: &str) -> RenderStage { self.part_render_stages.get(part_id).copied().unwrap_or(self.render_stage) }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

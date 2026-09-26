@@ -609,7 +609,7 @@ fn write_mtr4_layers(
                 container, &asset, material, namespace, &suffix, layer, files,
             )?;
             let properties = format!("assets/{namespace}/properties/vehicle/{suffix}.json");
-            files.insert(properties, pretty(&mtr4_properties(&filtered))?);
+            files.insert(properties, pretty(&mtr4_properties(&filtered, layer))?);
             let positions = format!("assets/{namespace}/properties/definition/{suffix}.json");
             files.insert(positions,pretty(&json!({"positionDefinitions":[{"name":"origin","positions":[{"x":0,"y":0,"z":0}],"positionsFlipped":[]}]}))?);
             output.push(json!({"modelResource":format!("{namespace}:models/vehicle/{suffix}.{extension}"),"textureResource":texture_resource,"modelPropertiesResource":format!("{namespace}:properties/vehicle/{suffix}.json"),"positionDefinitionsResource":format!("{namespace}:properties/definition/{suffix}.json"),"flipTextureV":document.flip_v(layer.flip_texture_v)}));
@@ -693,6 +693,7 @@ fn build_mtr3(
                             format!("{base}.obj/{}", part.name),
                             &white,
                             &black,
+                            layer.render_stage_for(&part.id),
                         ));
                     }
                     combined_parts.extend(document.parts);
@@ -859,12 +860,12 @@ fn material_groups(document: &ModelDocument) -> Vec<(Option<usize>, Vec<ModelPar
     }
     map.into_iter().collect()
 }
-fn mtr4_properties(document: &ModelDocument) -> Value {
-    let parts:Vec<_>=document.parts.iter().map(|part|json!({"names":[safe_name(&part.name)],"positionDefinitions":["origin"],"condition":"NORMAL","renderStage":"EXTERIOR","type":"NORMAL","displayXPadding":0,"displayYPadding":0,"displayColorCjk":"FFFFFF","displayColor":"FFFFFF","displayMaxLineHeight":0,"displayCjkSizeRatio":1,"displayPadZeros":0,"displayType":"DESTINATION","displayDefaultText":"","doorXMultiplier":0,"doorZMultiplier":0,"doorAnimationType":"STANDARD","renderFromOpeningDoorTime":0,"renderUntilOpeningDoorTime":0,"renderFromClosingDoorTime":0,"renderUntilClosingDoorTime":0,"flashOffTime":0,"flashOnTime":0})).collect();
+fn mtr4_properties(document: &ModelDocument, layer: &ModelLayer) -> Value {
+    let parts:Vec<_>=document.parts.iter().map(|part|json!({"names":[safe_name(&part.name)],"positionDefinitions":["origin"],"condition":"NORMAL","renderStage":layer.render_stage_for(&part.id).mtr4(),"type":"NORMAL","displayXPadding":0,"displayYPadding":0,"displayColorCjk":"FFFFFF","displayColor":"FFFFFF","displayMaxLineHeight":0,"displayCjkSizeRatio":1,"displayPadZeros":0,"displayType":"DESTINATION","displayDefaultText":"","doorXMultiplier":0,"doorZMultiplier":0,"doorAnimationType":"STANDARD","renderFromOpeningDoorTime":0,"renderUntilOpeningDoorTime":0,"renderFromClosingDoorTime":0,"renderUntilClosingDoorTime":0,"flashOffTime":0,"flashOnTime":0})).collect();
     json!({"parts":parts,"modelYOffset":0,"gangwayInnerSideResource":"","gangwayInnerTopResource":"","gangwayInnerBottomResource":"","gangwayOuterSideResource":"","gangwayOuterTopResource":"","gangwayOuterBottomResource":"","gangwayWidth":0,"gangwayHeight":0,"gangwayYOffset":0,"gangwayZOffset":0,"barrierInnerSideResource":"","barrierInnerTopResource":"","barrierInnerBottomResource":"","barrierOuterSideResource":"","barrierOuterTopResource":"","barrierOuterBottomResource":"","barrierWidth":0,"barrierHeight":0,"barrierYOffset":0,"barrierZOffset":0})
 }
-fn mtr3_part(name: String, whitelist: &str, blacklist: &str) -> Value {
-    json!({"name":name,"stage":"exterior","mirror":false,"skip_rendering_if_too_far":false,"door_offset":"none","render_condition":"all","positions":[[0,0]],"whitelisted_cars":whitelist,"blacklisted_cars":blacklist})
+fn mtr3_part(name: String, whitelist: &str, blacklist: &str, stage: crate::domain::RenderStage) -> Value {
+    json!({"name":name,"stage":stage.mtr3(),"mirror":false,"skip_rendering_if_too_far":false,"door_offset":"none","render_condition":"all","positions":[[0,0]],"whitelisted_cars":whitelist,"blacklisted_cars":blacklist})
 }
 
 fn write_obj(document: &ModelDocument, mtl: &str) -> String {
@@ -1210,6 +1211,20 @@ mod tests {
         }
     }
     #[test]
+    fn render_stages_export_per_part_with_target_names() {
+        let mut document = document();
+        document.parts.push(ModelPart { id: "window".into(), name: "window".into(), ..document.parts[0].clone() });
+        let mut layer: ModelLayer = serde_json::from_value(json!({"id":"layer","name":"Body","assetId":"asset"})).unwrap();
+        layer.render_stage = crate::domain::RenderStage::Interior;
+        layer.part_render_stages.insert("window".into(), crate::domain::RenderStage::InteriorTranslucent);
+        let parts = mtr4_properties(&document, &layer)["parts"].as_array().unwrap().clone();
+        assert_eq!(parts[0]["renderStage"], "INTERIOR");
+        assert_eq!(parts[1]["renderStage"], "INTERIOR_TRANSLUCENT");
+        assert_eq!(mtr3_part("window".into(), "", "", layer.render_stage_for("window"))["stage"], "interior_translucent");
+        assert_eq!(crate::domain::RenderStage::Light.mtr3(), "lights");
+        assert_eq!(crate::domain::RenderStage::AlwaysOnLight.mtr3(), "always_on_lights");
+    }
+    #[test]
     fn transforms_match_xyz_euler_and_inverse_transpose_normals() {
         let old_layer: ModelLayer =
             serde_json::from_value(json!({"id":"old", "name":"Old", "assetId":"asset"})).unwrap();
@@ -1417,6 +1432,8 @@ mod tests {
             hidden_parts: vec![],
             transform: Default::default(),
             part_transforms: BTreeMap::new(),
+            render_stage: Default::default(),
+            part_render_stages: BTreeMap::new(),
         });
         let train_hash = container
             .put_blob(
@@ -1549,6 +1566,8 @@ mod tests {
                 hidden_parts: vec![],
                 transform: Default::default(),
                 part_transforms: BTreeMap::new(),
+                render_stage: Default::default(),
+                part_render_stages: BTreeMap::new(),
             };
             train.carriages[0].body_models.push(layer.clone());
             let mut bogie = layer;

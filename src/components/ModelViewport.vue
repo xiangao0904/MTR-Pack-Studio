@@ -8,13 +8,13 @@ import { PreviewEnvironmentMap } from '../lib/preview-environment-map'
 import { defaultViewportSettings, normalizeViewportSettings } from '../lib/viewport-settings'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { getModelPreview, type MaterialBinding } from '../lib/projects'
+import { getModelPreview, type MaterialBinding, type RenderStage } from '../lib/projects'
 import { t } from '../i18n'
 
 export interface PreviewTransform { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }
-export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
+export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; renderStage?: RenderStage; partRenderStages?: Record<string,RenderStage>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
 export interface PreviewGuide { key: string; length: number; width: number; z: number; reversed: boolean }
-const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; thumbnailCarriageId?: string; thumbnailModelSignature?: string; thumbnailSavedSignature?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, renderMode: 'studio' })
+const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; showGrid?: boolean; wireframe?: boolean; vehicleLightsOn?: boolean; thumbnailCarriageId?: string; thumbnailModelSignature?: string; thumbnailSavedSignature?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showGrid: true, wireframe: false, vehicleLightsOn: true, renderMode: 'studio' })
 const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, signature: string, bytes: Uint8Array] }>()
 const host = ref<HTMLDivElement>()
 const modeTransitionKey = ref(0)
@@ -113,7 +113,21 @@ async function rebuild() {
             }
             object.geometry = geometry
           }
-          for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.wireframe = props.wireframe
+          const stage = asset.partRenderStages?.[object.userData.partId] || asset.renderStage || 'EXTERIOR'
+          const configure = (source: THREE.Material) => {
+            const material = source.clone()
+            if (material instanceof THREE.MeshStandardMaterial) {
+              material.wireframe = props.wireframe
+              if (stage === 'INTERIOR_TRANSLUCENT' || stage === 'ALWAYS_ON_LIGHT') { material.transparent = true; material.depthWrite = false }
+              if (stage === 'ALWAYS_ON_LIGHT' || (props.vehicleLightsOn && (stage === 'LIGHT' || stage === 'INTERIOR' || stage === 'INTERIOR_TRANSLUCENT'))) {
+                material.emissive = new THREE.Color(stage === 'LIGHT' || stage === 'ALWAYS_ON_LIGHT' ? 0xffffff : 0x777777)
+                material.emissiveMap ||= material.map
+                material.emissiveIntensity = stage === 'LIGHT' || stage === 'ALWAYS_ON_LIGHT' ? 1 : .4
+              }
+            }
+            return material
+          }
+          object.material = Array.isArray(object.material) ? object.material.map(configure) : configure(object.material)
         }
       })
       // Imported documents use the pack's reflected X axis. Undo that reflection
@@ -340,7 +354,7 @@ onMounted(()=>{
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
   const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild()
 })
-watch(()=>JSON.stringify([props.assets,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
+watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
 watch(()=>JSON.stringify(props.guides),rebuildGuides)
 watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],updateSelection)
 watch(()=>props.cameraView,changeCamera)
