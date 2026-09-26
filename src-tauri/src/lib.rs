@@ -656,6 +656,27 @@ fn list_assets(state: State<AppState>) -> Result<AssetCatalog, String> {
 }
 
 #[tauri::command]
+fn list_model_assets(state: State<AppState>) -> Result<Vec<ModelCatalogItem>, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let session = active.as_mut().ok_or("No project is open.")?;
+    let mut models = Vec::with_capacity(session.container.index.assets.len());
+    for (id, hash) in session.container.index.assets.clone() {
+        let asset: AssetDefinition = serde_json::from_slice(&session.container.read_blob(&hash)?).map_err(|e| e.to_string())?;
+        models.push(ModelCatalogItem {
+            thumbnail_hash: session.container.index.asset_thumbnail_hashes.get(&id).cloned(),
+            id,
+            name: asset.name,
+            source_format: asset.source_format,
+            part_count: asset.parts.len(),
+            triangle_count: asset.parts.iter().map(|part| part.triangle_count).sum(),
+            references: Vec::new(),
+        });
+    }
+    models.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(models)
+}
+
+#[tauri::command]
 fn rename_asset(state: State<AppState>, kind: String, id: String, name: String) -> Result<(), String> {
     let name = validate_project_name(&name)?.to_string();
     let mut active = state.active.lock().map_err(|_| lock_error())?;
@@ -946,6 +967,7 @@ pub fn run() {
             import_model_asset,
             attach_model_asset,
             list_assets,
+            list_model_assets,
             rename_asset,
             delete_asset,
             store_asset_thumbnail,

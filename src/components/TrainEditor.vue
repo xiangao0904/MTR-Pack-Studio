@@ -10,7 +10,7 @@ import SceneSettingsPanel from './SceneSettingsPanel.vue'
 import { loadViewportPreferences, type PreviewRenderMode } from '../lib/viewport-settings'
 import { EditorHistory, trainHistorySnapshot } from '../lib/editor-history'
 import { t } from '../i18n'
-import { getProject, getRail, type RailDefinition, analyzeModelImport, attachModelAsset, chooseModelDependency, chooseModelFile, chooseTextureFile, deleteAsset, importTextureFile, listAssets, storeImageBytes, getImageAsset, getModelAsset, getTrain, importModel, updateTrain, type AssetCatalog, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition, type ValidationIssue } from '../lib/projects'
+import { getProject, getRail, type RailDefinition, analyzeModelImport, attachModelAsset, chooseModelDependency, chooseModelFile, chooseTextureFile, deleteAsset, importTextureFile, listAssets, listModelAssets, storeImageBytes, getImageAsset, getModelAsset, getTrain, importModel, updateTrain, type AssetCatalog, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition, type ValidationIssue } from '../lib/projects'
 import { arrangeConsist, matchesPlacement } from '../lib/train-preview'
 import { SaveQueue } from '../lib/save-queue'
 import { carriageThumbnailSignature } from '../lib/thumbnail-signature'
@@ -26,6 +26,8 @@ const selectedPartId = ref('')
 const selectedInstanceKey = ref('')
 const picker = ref<{kind:'model';slot:'body'|'bogie1'|'bogie2';replace?:ModelLayer}|{kind:'texture';materialId:string;channel?:TextureChannel}>()
 const catalog = ref<AssetCatalog>({models:[],textures:[]})
+const catalogLoading = ref(false)
+let catalogRequest = 0
 const assetQuery = ref('')
 const pickerItems = computed(() => (picker.value?.kind==='model' ? catalog.value.models : catalog.value.textures).filter(item=>item.name.toLowerCase().includes(assetQuery.value.toLowerCase())))
 const vehicleLightsOn = ref(true)
@@ -224,8 +226,13 @@ function addModel(slot:'body'|'bogie1'|'bogie2',replace?:ModelLayer){
   operationPromise=addModelImpl(slot,replace).finally(()=>{operationPromise=undefined});return operationPromise
 }
 async function openAssetPicker(value:NonNullable<typeof picker.value>){
-  try{await flushEdits();catalog.value=await listAssets(props.projectPath);assetQuery.value='';picker.value=value}
-  catch(cause){emit('error',message(cause))}
+  const request = ++catalogRequest
+  assetQuery.value='';picker.value=value;catalogLoading.value=true
+  try {
+    if(value.kind==='model') catalog.value.models=await listModelAssets(props.projectPath)
+    else catalog.value=await listAssets(props.projectPath)
+  } catch(cause) { if(request===catalogRequest)emit('error',message(cause)) }
+  finally { if(request===catalogRequest)catalogLoading.value=false }
 }
 function applyAddedModel(slot:'body'|'bogie1'|'bogie2',asset:AssetDefinition,replace?:ModelLayer){
   const group=slotGroups.value.find(item=>item.key===slot)!.layers;const added=group.at(-1)!
@@ -352,7 +359,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
     </div>
   </fieldset>
   <div v-else class="editor-loading">{{ t('loading') }}</div>
-  <div v-if="picker" class="asset-picker-scrim" @click.self="picker=undefined"><div class="asset-picker"><header><h2>{{ picker.kind==='model'?t('assetModels'):t('assetTextures') }}</h2><button @click="picker=undefined">{{ t('cancel') }}</button></header><label><Search :size="15" /><input v-model="assetQuery" :placeholder="t('searchAssets')" autofocus /></label><div class="asset-picker-items"><button v-for="item in pickerItems" :key="'id' in item?item.id:item.hash" @click="useAsset('id' in item?item.id:item.hash)"><Box v-if="picker.kind==='model'" :size="20" /><span><strong>{{ item.name }}</strong><small>{{ 'sourceFormat' in item?item.sourceFormat.toUpperCase():`${item.width} × ${item.height}` }}</small></span></button><p v-if="!pickerItems.length">{{ picker.kind==='model'?t('noLibraryModels'):t('noLibraryTextures') }}</p></div></div></div>
+  <div v-if="picker" class="asset-picker-scrim" @click.self="picker=undefined"><div class="asset-picker"><header><h2>{{ picker.kind==='model'?t('assetModels'):t('assetTextures') }}</h2><button @click="picker=undefined">{{ t('cancel') }}</button></header><label><Search :size="15" /><input v-model="assetQuery" :placeholder="t('searchAssets')" autofocus /></label><div class="asset-picker-items"><p v-if="catalogLoading">{{ t('loading') }}</p><template v-else><button v-for="item in pickerItems" :key="'id' in item?item.id:item.hash" @click="useAsset('id' in item?item.id:item.hash)"><Box v-if="picker.kind==='model'" :size="20" /><span><strong>{{ item.name }}</strong><small>{{ 'sourceFormat' in item?item.sourceFormat.toUpperCase():`${item.width} × ${item.height}` }}</small></span></button><p v-if="!pickerItems.length">{{ picker.kind==='model'?t('noLibraryModels'):t('noLibraryTextures') }}</p></template></div></div></div>
 </template>
 
 <style scoped>

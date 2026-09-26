@@ -192,6 +192,10 @@ export async function listAssets(path = browserActivePath): Promise<AssetCatalog
   return {models,textures}
 }
 
+export async function listModelAssets(path = browserActivePath): Promise<ModelCatalogItem[]> {
+  return inTauri() ? invoke<ModelCatalogItem[]>('list_model_assets') : (await listAssets(path)).models
+}
+
 export async function importModelAsset(path: string, dependencyOverrides: Record<string,string> = {}): Promise<AssetDefinition> {
   if (!inTauri()) throw new Error(t('desktopModelImport'))
   const asset = await invoke<AssetDefinition>('import_model_asset',{path,dependencyOverrides})
