@@ -1,5 +1,9 @@
 # Studio train acceptance fixture
 
+> Updated 2026-09-27: built-in train models and textures were removed from the app.
+> The desktop editor imports user-provided models. Any browser sample workflow
+> below is historical; binary regression fixtures now live in `tests/fixtures/preview-glb/`.
+
 Original, deliberately simple static metro geometry for testing MTR Pack Studio.
 The geometry, generated textures and generator are dedicated to the public domain
 under CC0 1.0. No third-party game models or textures are included.

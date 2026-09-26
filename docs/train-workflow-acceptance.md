@@ -1,5 +1,9 @@
 # Train workflow acceptance
 
+> Updated 2026-09-27: built-in train models and textures were removed from the app.
+> The desktop editor imports user-provided models. Any browser sample workflow
+> below is historical; binary regression fixtures now live in `tests/fixtures/preview-glb/`.
+
 Status recorded on 2026-09-22. The editor and automated export checks are available;
 visual acceptance inside Minecraft remains pending. See
 [export-compatibility.md](export-compatibility.md) for the pinned MTR contracts and

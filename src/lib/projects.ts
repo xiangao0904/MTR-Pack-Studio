@@ -118,7 +118,19 @@ export async function getTrain(path: string, trainId: string): Promise<TrainDefi
   if (inTauri()) return invoke<TrainDefinition>('get_train', { trainId })
   const value = localStorage.getItem(`${dataKey(path)}:train:${trainId}`)
   if (!value) throw new Error('The browser preview train could not be found.')
-  return JSON.parse(value) as TrainDefinition
+  const train = JSON.parse(value) as TrainDefinition
+  // Retire only the two built-in browser demo IDs; imported project assets are untouched.
+  let changed = false
+  for (const carriage of train.carriages) {
+    for (const slot of ['bodyModels', 'bogie1Models', 'bogie2Models'] as const) {
+      const layers = carriage[slot].filter(layer => !['fixture-studio-train', 'fixture-studio-bogie'].includes(layer.assetId))
+      if (layers.length !== carriage[slot].length) {
+        carriage[slot] = layers; delete carriage.thumbnailHash; delete carriage.thumbnailModelSignature; changed = true
+      }
+    }
+  }
+  if (changed) { train.revision++; localStorage.setItem(`${dataKey(path)}:train:${trainId}`, JSON.stringify(train)) }
+  return train
 }
 
 export async function updateTrain(path: string, train: TrainDefinition, expectedRevision: number): Promise<TrainDefinition> {
@@ -138,7 +150,7 @@ export async function deleteTrain(path: string, trainId: string): Promise<void> 
 }
 
 export async function chooseModelFile(): Promise<string | null> {
-  if (!inTauri()) return 'preview://studio-train'
+  if (!inTauri()) throw new Error(t('desktopModelImport'))
   return open({ directory: false, multiple: false, title: 'Import Model', filters: [{ name: '3D Models', extensions: ['obj', 'fbx', 'mqo'] }] })
 }
 
@@ -149,19 +161,12 @@ export async function chooseModelDependency(name: string): Promise<string | null
 }
 
 export async function analyzeModelImport(path: string, dependencyOverrides: Record<string, string> = {}): Promise<ImportAnalysis> {
-  if (!inTauri()) { const asset = await getModelAsset('fixture-studio-train'); return {format: 'obj', missingDependencies: [], parts: asset.parts, warnings: [t('browserDemoModels')]} }
+  if (!inTauri()) throw new Error(t('desktopModelImport'))
   return invoke<ImportAnalysis>('analyze_model_import', { path, dependencyOverrides })
 }
 
 export async function importModel(trainId: string, carriageId: string, slot: 'body' | 'bogie1' | 'bogie2', path: string, dependencyOverrides: Record<string, string> = {}, expectedRevision?: number): Promise<{ train: TrainDefinition; asset: AssetDefinition }> {
-  if (!inTauri()) {
-    const asset = await getModelAsset(slot === 'body' ? 'fixture-studio-train' : 'fixture-studio-bogie')
-    const train = await getTrain(browserActivePath, trainId); const carriage = train.carriages.find(car => car.id === carriageId)
-    if (!carriage) throw new Error(t('noCarriage'))
-    const layers = slot === 'body' ? carriage.bodyModels : slot === 'bogie1' ? carriage.bogie1Models : carriage.bogie2Models
-    layers.push({id: crypto.randomUUID(), name: asset.name, assetId: asset.id, visible: true, flipTextureV: false, materialBindings: [], partRules: {}})
-    return { train: await updateTrain(browserActivePath, train, expectedRevision ?? train.revision), asset }
-  }
+  if (!inTauri()) throw new Error(t('desktopModelImport'))
   const result = await invoke<{train: TrainDefinition; asset: AssetDefinition}>('import_model', { trainId, carriageId, slot, path, dependencyOverrides, expectedRevision })
   result.asset.materials = await invoke<ModelMaterial[]>('get_model_materials', { assetId: result.asset.id })
   return result
@@ -169,7 +174,7 @@ export async function importModel(trainId: string, carriageId: string, slot: 'bo
 
 export async function listAssets(path = browserActivePath): Promise<AssetCatalog> {
   if (inTauri()) return invoke<AssetCatalog>('list_assets')
-  const models = await Promise.all(['fixture-studio-train','fixture-studio-bogie','fixture-default-rail'].map(async id => {
+  const models = await Promise.all(['fixture-default-rail'].map(async id => {
     const asset = await getModelAsset(id)
     const project = await getProject(path)
     const references: string[] = []
@@ -188,7 +193,7 @@ export async function listAssets(path = browserActivePath): Promise<AssetCatalog
 }
 
 export async function importModelAsset(path: string, dependencyOverrides: Record<string,string> = {}): Promise<AssetDefinition> {
-  if (!inTauri()) return getModelAsset('fixture-studio-train')
+  if (!inTauri()) throw new Error(t('desktopModelImport'))
   const asset = await invoke<AssetDefinition>('import_model_asset',{path,dependencyOverrides})
   return {...asset,materials:await invoke<ModelMaterial[]>('get_model_materials',{assetId:asset.id})}
 }
@@ -222,13 +227,13 @@ export async function storeAssetThumbnail(assetId:string,bytes:Uint8Array):Promi
 }
 
 export async function getModelAsset(assetId: string): Promise<AssetDefinition> {
-  if (!inTauri()) { const name = assetId === 'fixture-studio-train' ? 'studio-train' : assetId === 'fixture-studio-bogie' ? 'studio-bogie' : assetId === 'fixture-default-rail' ? 'default-rail' : null; if (!name) throw new Error(t('missingModel')); const asset: AssetDefinition = await (await fetch(`/fixtures/${name}.json`)).json(); asset.warnings = [t('browserDemoModels')]; return asset }
+  if (!inTauri()) { const name = assetId === 'fixture-default-rail' ? 'default-rail' : null; if (!name) throw new Error(t('missingModel')); const asset: AssetDefinition = await (await fetch(`/fixtures/${name}.json`)).json(); asset.warnings = [t('browserDemoModels')]; return asset }
   const [asset, materials] = await Promise.all([invoke<AssetDefinition>('get_model_asset', { assetId }), invoke<ModelMaterial[]>('get_model_materials', { assetId })]); return { ...asset, materials }
 }
 
 export async function getModelPreview(assetId: string, materialBindings: MaterialBinding[] = []): Promise<ArrayBuffer> {
   if (!inTauri()) {
-    const asset = await getModelAsset(assetId); const name = asset.id === 'fixture-studio-train' ? 'studio-train' : asset.id === 'fixture-default-rail' ? 'default-rail' : 'studio-bogie'
+    await getModelAsset(assetId); const name = 'default-rail'
     const source = await (await fetch(`/fixtures/${name}.glb`)).arrayBuffer()
     const replacements: {materialId: string; bytes: ArrayBuffer; channel?: string}[] = []
     for (const binding of materialBindings) {
