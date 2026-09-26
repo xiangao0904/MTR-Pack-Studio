@@ -44,6 +44,49 @@ export class PreviewEnvironment {
     for (const texture of this.textures) texture.dispose()
     this.materials.clear();this.textures.clear()
   }
+  private detachMaterials(root?: THREE.Object3D) {
+    root?.traverse(object => {
+      if (!(object instanceof THREE.Mesh)) return
+      const state = this.originals.get(object)
+      if (!state) return
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+        this.materials.delete(material)
+        material.dispose()
+      }
+      object.material = state.material
+      object.castShadow = state.castShadow
+      object.receiveShadow = state.receiveShadow
+      this.originals.delete(object)
+    })
+  }
+  private attachMaterials(root?: THREE.Object3D) {
+    root?.traverse(object => {
+      if (!(object instanceof THREE.Mesh) || this.originals.has(object)) return
+      this.originals.set(object,{material:object.material,castShadow:object.castShadow,receiveShadow:object.receiveShadow})
+      object.material=Array.isArray(object.material)?object.material.map(source=>this.convertMaterial(source,this.mode)):this.convertMaterial(object.material,this.mode)
+      object.castShadow=true;object.receiveShadow=true
+    })
+  }
+  /** Swap preview geometry while retaining the current sky, ground, lights and environment map. */
+  replaceObjects(previous: THREE.Object3D | undefined, next: THREE.Object3D | undefined, root: THREE.Object3D) {
+    this.detachMaterials(previous)
+    this.attachMaterials(next)
+    this.bounds.makeEmpty()
+    root.updateWorldMatrix(true,true)
+    root.traverse(object=>{if(object instanceof THREE.Mesh && visible(object)) {if(!object.geometry.boundingBox)object.geometry.computeBoundingBox();if(object.geometry.boundingBox)this.bounds.union(object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld))}})
+    if(this.bounds.isEmpty())this.bounds.set(new THREE.Vector3(-1,0,-1),new THREE.Vector3(1,2,1))
+    const light=this.lights[0]
+    if(light) {
+      const center=this.bounds.getCenter(new THREE.Vector3()),extent=this.bounds.getSize(new THREE.Vector3()),direction=this.lightDirection()
+      light.position.copy(center).addScaledVector(direction,Math.max(30,extent.length()*2))
+      light.target.position.copy(center)
+      this.fitShadow(light,direction)
+      const camera=light.shadow.camera
+      this.lighting.previewShadowExtent.value.set(camera.right-camera.left,camera.top-camera.bottom,camera.far-camera.near)
+      this.lighting.previewLightRadius.value=penumbraRadius(1,this.settings.lightSize)
+      light.shadow.needsUpdate=true
+    }
+  }
   private clearScenery() {
     if(this.clouds && !this.clouds.parent)this.clouds.dispose()
     for (const light of this.lights) light.shadow.dispose()
@@ -72,12 +115,7 @@ export class PreviewEnvironment {
     const camera=light.shadow.camera
     this.lighting.previewShadowExtent.value.set(camera.right-camera.left,camera.top-camera.bottom,camera.far-camera.near)
     this.lighting.previewLightRadius.value=penumbraRadius(1,this.settings.lightSize)
-    root?.traverse(object=>{
-      if(!(object instanceof THREE.Mesh))return
-      this.originals.set(object,{material:object.material,castShadow:object.castShadow,receiveShadow:object.receiveShadow})
-      object.material=Array.isArray(object.material)?object.material.map(source=>this.convertMaterial(source,mode)):this.convertMaterial(object.material,mode)
-      object.castShadow=true;object.receiveShadow=true
-    })
+    this.attachMaterials(root)
   }
   /** Update uniforms, lights and existing scenery without touching source model materials. */
   updateSettings(mode: PreviewRenderMode, settings: ViewportSettings) {

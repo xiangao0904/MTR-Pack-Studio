@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
-import { loadPreviewRail, repeatRailModel } from '../lib/preview-rails'
-import { type BuiltInRailId } from '../lib/rail-preview-options'
+import { loadPreviewRail, railSegmentPositions, repeatRailModel } from '../lib/preview-rails'
+import { builtInRailInterval, type BuiltInRailId } from '../lib/rail-preview-options'
 import { wireframeOpacity } from '../lib/wireframe-visibility'
 import { PreviewRenderer, filterModelTextures, prepareMaterialTextures } from '../lib/preview-renderer'
 import { PreviewEnvironment, type PreviewLightingMood } from '../lib/preview-environment'
@@ -51,6 +51,7 @@ let railSource: THREE.Group | undefined
 let railSourceKey = ''
 let railGeneration = 0
 let rails: THREE.Group | undefined
+let railCoverageKey = ''
 let content: THREE.Group | undefined
 let guides: THREE.Group | undefined
 let selection: THREE.Box3Helper | undefined
@@ -65,6 +66,22 @@ const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)'
 const requestedThumbnails = new Map<string, string>()
 let pointerStart = new THREE.Vector2()
 const byteCache = new Map<string, Promise<ArrayBuffer>>()
+const parsedCache = new Map<string, Promise<THREE.Group>>()
+const contentCache = new Map<string, THREE.Group>()
+const ownedGeometries = new WeakSet<THREE.BufferGeometry>()
+let thumbnailTimer: number | undefined
+
+function disposeCachedContent(root: THREE.Object3D) {
+  const materials = new Set<THREE.Material>()
+  const geometries = new Set<THREE.BufferGeometry>()
+  root.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) return
+    if (ownedGeometries.has(object.geometry)) geometries.add(object.geometry)
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material)
+  })
+  materials.forEach(material => material.dispose())
+  geometries.forEach(geometry => geometry.dispose())
+}
 
 function disposeObject(root: THREE.Object3D) {
   const geometries = new Set<THREE.BufferGeometry>()
@@ -86,19 +103,20 @@ function disposeObject(root: THREE.Object3D) {
 async function rebuild() {
   if (!scene) return
   const version = ++generation
-  const group = new THREE.Group()
-  const parsed = new Map<string, Promise<THREE.Group>>()
+  const signature = JSON.stringify([props.assets,props.vehicleLightsOn])
+  const cached = contentCache.get(signature)
+  const group = cached ?? new THREE.Group()
   let complete = true
-  try {
+  if (!cached) try {
     const results = await Promise.allSettled(props.assets.map(async asset => {
       const cacheKey = JSON.stringify([asset.assetId, asset.bindings])
       if (!byteCache.has(cacheKey)) byteCache.set(cacheKey, getModelPreview(asset.assetId, asset.bindings).catch(error => { byteCache.delete(cacheKey); throw error }))
-      if (!parsed.has(cacheKey)) parsed.set(cacheKey, (async () => {
+      if (!parsedCache.has(cacheKey)) parsedCache.set(cacheKey, (async () => {
         const gltf = await new GLTFLoader().parseAsync(await byteCache.get(cacheKey)!, '')
         prepareMaterialTextures(gltf.scene)
         return gltf.scene
-      })())
-      const model = (await parsed.get(cacheKey)!).clone(true)
+      })().catch(error => { parsedCache.delete(cacheKey); throw error }))
+      const model = (await parsedCache.get(cacheKey)!).clone(true)
       const instance = new THREE.Group(); instance.position.z = asset.z; instance.rotation.y = asset.reversed ? Math.PI : 0
       const offset = new THREE.Group(); offset.position.z = asset.bogieOffset
       applyTransform(model, asset.transform)
@@ -118,6 +136,7 @@ async function rebuild() {
               const uv = geometry.getAttribute('uv')
               if (uv) { for (let index = 0; index < uv.count; index++) uv.setY(index, 1 - uv.getY(index)); uv.needsUpdate = true }
               flipped.set(source, geometry)
+              ownedGeometries.add(geometry)
             }
             object.geometry = geometry
           }
@@ -148,19 +167,30 @@ async function rebuild() {
     const failure = results.find(result => result.status === 'rejected')
     if (failure?.status === 'rejected') throw failure.reason
   } catch (cause) { complete = false; if (version === generation) emit('error', cause instanceof Error ? cause.message : String(cause)) }
-  if (disposed || version !== generation) { disposeObject(group); return }
+  if (disposed || version !== generation) { if (!cached) disposeCachedContent(group); return }
+  if (!cached && complete) contentCache.set(signature,group)
   pipeline?.clearMaterials()
-  environment?.restoreMaterials()
   selectedObject = undefined
-  if (content) { previewRoot.remove(content); disposeObject(content) }
-  content = group; previewRoot.add(content); updateEnvironment(); rebuildGuides(); updateSelection()
+  const previous = content
+  if (previous) previewRoot.remove(previous)
+  content = group; previewRoot.add(content)
+  environment?.replaceObjects(previous,content,previewRoot)
+  if (previous && previous !== content && ![...contentCache.values()].includes(previous)) disposeCachedContent(previous)
+  if (cached) { contentCache.delete(signature); contentCache.set(signature,cached) }
+  applyWireframeMaterials()
+  if(renderer)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
+  if(renderer) renderer.shadowMap.needsUpdate=true
+  rebuildGuides(); updateSelection()
+  while (contentCache.size > 4) {
+    const oldest = contentCache.keys().next().value
+    if (!oldest) break
+    const stale = contentCache.get(oldest)!
+    contentCache.delete(oldest)
+    if (stale !== content) disposeCachedContent(stale)
+  }
   const keys = props.assets.map(item => item.key).join('|') + props.guides.map(item => item.key).join('|')
   if (keys !== previousKeys) { frameContent(false); previousKeys = keys }
-  const carriageId=props.thumbnailCarriageId,signature=props.thumbnailModelSignature
-  if (complete && carriageId && signature && signature!==props.thumbnailSavedSignature && requestedThumbnails.get(carriageId)!==signature && props.assets.length) {
-    requestedThumbnails.set(carriageId,signature)
-    try { captureThumbnail(carriageId,signature) } catch(cause) { requestedThumbnails.delete(carriageId);emit('error',cause instanceof Error?cause.message:String(cause)) }
-  }
+  if (complete) queueThumbnail()
 }
 async function loadProjectRail(rail: RailDefinition) {
   const root = new THREE.Group()
@@ -197,28 +227,31 @@ async function rebuildRails() {
   const key = JSON.stringify(rail ?? props.builtInRailId)
   let replacement: THREE.Group | undefined
   try {
+    const positions = props.showRails ? railSegmentPositions(props.guides,rail?.repeatInterval ?? builtInRailInterval) : []
+    const coverageKey = `${positions.length}:${positions[0] ?? ''}:${positions.at(-1) ?? ''}`
+    if (railSourceKey === key && railCoverageKey === coverageKey && (props.showRails ? !!rails : !rails)) return
     if (props.showRails && (!railSource || railSourceKey !== key)) {
       replacement = rail ? await loadProjectRail(rail) : await loadPreviewRail(props.builtInRailId)
       if (disposed || version !== railGeneration) { disposeObject(replacement); return }
     }
-    // Restore materials before detaching or disposing shared segment resources.
-    pipeline?.clearMaterials(); environment?.restoreMaterials()
-    if (rails) { previewRoot.remove(rails); rails = undefined }
+    const nextSource = replacement ?? railSource
+    const nextRails = props.showRails && nextSource && positions.length ? repeatRailModel(nextSource,props.guides,rail?.repeatInterval) : undefined
+    pipeline?.clearMaterials()
+    const previous = rails
+    const oldSource = railSource
+    if (previous) previewRoot.remove(previous)
     if (replacement) {
-      if (railSource) disposeObject(railSource)
       railSource = replacement; railSourceKey = key; replacement = undefined
     }
-    if (props.showRails && railSource) {
-      rails = repeatRailModel(railSource, props.guides, rail?.repeatInterval)
-      previewRoot.add(rails)
-    }
-    updateEnvironment()
+    rails = nextRails
+    if (rails) previewRoot.add(rails)
+    environment?.replaceObjects(previous,rails,previewRoot)
+    if (oldSource && oldSource !== railSource) disposeObject(oldSource)
+    railCoverageKey = coverageKey
+    if(renderer){filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures);renderer.shadowMap.needsUpdate=true}
   } catch (cause) {
     if (replacement) disposeObject(replacement)
     if (disposed || version !== railGeneration) return
-    pipeline?.clearMaterials(); environment?.restoreMaterials()
-    if (rails) { previewRoot.remove(rails); rails = undefined }
-    updateEnvironment()
     emit('error', `${t('railPreviewLoadFailed')} ${cause instanceof Error ? cause.message : String(cause)}`)
   }
 }
@@ -326,6 +359,19 @@ function captureThumbnail(carriageId: string, signature: string) {
     thumbEnvironment?.dispose();thumbPipeline?.dispose();thumbMap?.dispose()
   }
   if(data)emit('thumbnail', carriageId, signature, Uint8Array.from(atob(data.split(',')[1]!), character => character.charCodeAt(0)))
+}
+function queueThumbnail() {
+  if (thumbnailTimer !== undefined) window.clearTimeout(thumbnailTimer)
+  thumbnailTimer = undefined
+  const carriageId = props.thumbnailCarriageId, signature = props.thumbnailModelSignature
+  if (!carriageId || !signature || signature === props.thumbnailSavedSignature || requestedThumbnails.get(carriageId) === signature || !props.assets.length) return
+  thumbnailTimer = window.setTimeout(() => {
+    thumbnailTimer = undefined
+    if (disposed || carriageId !== props.thumbnailCarriageId || signature !== props.thumbnailModelSignature) return
+    requestedThumbnails.set(carriageId,signature)
+    try { captureThumbnail(carriageId,signature) }
+    catch(cause) { requestedThumbnails.delete(carriageId);emit('error',cause instanceof Error?cause.message:String(cause)) }
+  },900)
 }
 function updateEnvironment() {
   lightingTween=undefined
@@ -478,7 +524,8 @@ onMounted(()=>{
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
   const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();updateAdaptiveWireframe();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild();void rebuildRails()
 })
-watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
+watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn]),()=>void rebuild())
+watch(()=>[props.thumbnailCarriageId,props.thumbnailModelSignature,props.thumbnailSavedSignature],queueThumbnail)
 watch(()=>JSON.stringify(props.guides),()=>{rebuildGuides();void rebuildRails()})
 watch(()=>[props.showRails,JSON.stringify(props.previewRail),props.builtInRailId],()=>void rebuildRails())
 watch(()=>props.groundHeight,updateEnvironment)
@@ -488,7 +535,7 @@ watch(()=>props.showGrid,value=>{if(grid)grid.visible=value})
 watch(()=>props.wireframe,updateWireframe)
 watch(()=>props.settings,updateViewportSettings,{deep:true})
 watch(()=>props.renderMode,()=>{const from=environment?.lightingMood();updateEnvironment();const to=environment?.lightingMood();if(from&&to&&!reducedMotion()){lightingTween={start:performance.now(),from,to};environment?.blendLighting(from,to,0);modeTransitionKey.value++}updateWireframe();if(props.renderMode === 'minecraft' && !minecraftFramed)frameContent()})
-onBeforeUnmount(()=>{disposed=true;generation++;railGeneration++;if(skyTimer!==undefined)clearTimeout(skyTimer);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(rails)previewRoot.remove(rails);if(railSource)disposeObject(railSource);if(scene)disposeObject(scene);byteCache.clear();renderer?.domElement.removeEventListener('pointerdown',cancelCameraTween);renderer?.domElement.removeEventListener('wheel',cancelCameraTween);renderer?.dispose();renderer?.domElement.remove()})
+onBeforeUnmount(()=>{disposed=true;generation++;railGeneration++;if(skyTimer!==undefined)clearTimeout(skyTimer);if(thumbnailTimer!==undefined)clearTimeout(thumbnailTimer);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();pipeline?.dispose();environment?.dispose();environmentMap?.dispose();if(content)previewRoot.remove(content);for(const cached of contentCache.values())disposeCachedContent(cached);if(content&&![...contentCache.values()].includes(content))disposeCachedContent(content);contentCache.clear();for(const parsed of parsedCache.values())void parsed.then(disposeObject).catch(()=>{});parsedCache.clear();if(rails)previewRoot.remove(rails);if(railSource)disposeObject(railSource);if(scene)disposeObject(scene);byteCache.clear();renderer?.domElement.removeEventListener('pointerdown',cancelCameraTween);renderer?.domElement.removeEventListener('wheel',cancelCameraTween);renderer?.dispose();renderer?.domElement.remove()})
 defineExpose({fitView:()=>frameContent()})
 </script>
 <template><div ref="host" class="model-viewport"><div v-if="modeTransitionKey" :key="modeTransitionKey" class="viewport-mode-wash" aria-hidden="true"/><svg class="orientation" viewBox="-45 -45 90 90" aria-hidden="true"><g v-for="axis in orientationAxes" :key="axis.name" :stroke="axis.color" :fill="axis.color"><line x1="0" y1="0" :x2="axis.x" :y2="axis.y" stroke-width="1.6"/><text :x="axis.x * 1.3" :y="axis.y * 1.3 + 4" text-anchor="middle" stroke="none">{{ axis.name }}</text></g></svg><div v-if="!assets.length" class="viewport-empty">{{ t('previewEmpty') }}</div></div></template>

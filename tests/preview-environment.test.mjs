@@ -35,6 +35,34 @@ test('three preview modes clone PBR channels and preserve source textures, cutou
   assert.equal(sourceDisposed,0);assert.equal(f.scene.environment,null);f.dispose()
 })
 
+test('switching model content keeps the same lighting and scenery objects', () => {
+  const f=fixture()
+  f.environment.apply(f.root,'minecraft')
+  const light=f.scene.getObjectByProperty('type','DirectionalLight')
+  const clouds=f.scene.getObjectByName('Minecraft block clouds')
+  const ground=f.scene.children.flatMap(group=>group.children).find(object=>object instanceof THREE.Mesh && Array.isArray(object.material) && object.material.length===6)
+  const previousMaterial=f.mesh.material[0]
+  let oldMaterialDisposals=0
+  previousMaterial.addEventListener('dispose',()=>oldMaterialDisposals++)
+  const shadowMap=new THREE.WebGLRenderTarget(8,8)
+  light.shadow.map=shadowMap
+  const nextSource=new THREE.MeshStandardMaterial({color:0x7f8fa0})
+  const next=new THREE.Mesh(new THREE.BoxGeometry(4,5,26),nextSource)
+  next.position.y=2
+  f.root.remove(f.mesh);f.root.add(next)
+  f.environment.replaceObjects(f.mesh,next,f.root)
+  assert.equal(f.scene.getObjectByProperty('type','DirectionalLight'),light)
+  assert.equal(light.shadow.map,shadowMap)
+  assert.equal(f.scene.getObjectByName('Minecraft block clouds'),clouds)
+  assert.equal(f.scene.children.flatMap(group=>group.children).find(object=>object===ground),ground)
+  assert.equal(f.mesh.material[0],f.source)
+  assert.equal(oldMaterialDisposals,1)
+  assert.notEqual(next.material,nextSource)
+  assert.equal(f.environment.updateSettings('minecraft',defaultViewportSettings('minecraft')),true)
+  assert.notEqual(previousMaterial,f.mesh.material[0])
+  f.environment.dispose();next.geometry.dispose();next.material.dispose();f.dispose()
+})
+
 test('Minecraft ground remains one metre per tile and cleans scenery and shadow targets',()=>{
   const f=fixture();f.mesh.scale.z=45;f.mesh.position.z=300
   f.environment.apply(f.root,'minecraft')
