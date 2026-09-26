@@ -275,6 +275,19 @@ fn generate_default_rail_browser_fixture() {
     asset.id="fixture-default-rail".into();
     fs::create_dir_all(public.join("fixtures")).unwrap();
     fs::write(public.join("fixtures/default-rail.glb"),bytes).unwrap();
-    fs::write(public.join("fixtures/default-rail.json"),serde_json::to_vec_pretty(&asset).unwrap()).unwrap();
+    let document: model::ModelDocument = rmp_serde::from_slice(&container.read_blob(&asset.document_hash).unwrap()).unwrap();
+    let mut metadata=serde_json::to_value(&asset).unwrap();
+    metadata["materials"]=serde_json::to_value(&document.materials).unwrap();
+    fs::write(public.join("fixtures/default-rail.json"),serde_json::to_vec_pretty(&metadata).unwrap()).unwrap();
     drop(container);fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn default_rail_browser_fixture_has_material_metadata() {
+    let metadata: serde_json::Value=serde_json::from_str(include_str!("../../public/fixtures/default-rail.json")).unwrap();
+    let materials: Vec<model::ModelMaterial>=serde_json::from_value(metadata["materials"].clone()).unwrap();
+    assert!(!materials.is_empty());
+    let glb=glb_json(include_bytes!("../../public/fixtures/default-rail.glb"));
+    assert_eq!(materials.len(),glb["materials"].as_array().unwrap().len());
+    assert!(materials.iter().any(|material|material.texture.is_some()));
 }
