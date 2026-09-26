@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { loadPreviewRail, repeatRailModel } from '../lib/preview-rails'
 import { type BuiltInRailId } from '../lib/rail-preview-options'
+import { wireframeOpacity } from '../lib/wireframe-visibility'
 import { PreviewRenderer, filterModelTextures, prepareMaterialTextures } from '../lib/preview-renderer'
 import { PreviewEnvironment, type PreviewLightingMood } from '../lib/preview-environment'
 import type { PreviewRenderMode, ViewportSettings } from '../lib/viewport-settings'
@@ -334,6 +335,7 @@ function updateEnvironment() {
   activeSettings=settings
   if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings), environmentMap.background)
   environment?.apply(previewRoot, props.renderMode, settings, props.groundHeight)
+  applyWireframeMaterials()
   pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity)
   if(renderer)filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe)
@@ -361,7 +363,62 @@ function updateViewportSettings() {
     },120)
   }
 }
-function updateWireframe() { pipeline?.setIndirect(props.wireframe ? 0 : normalizeViewportSettings(props.renderMode, props.settings).indirectIntensity); pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;content?.traverse(object => { if(object instanceof THREE.Mesh)for(const material of Array.isArray(object.material)?object.material:[object.material])material.wireframe=props.wireframe }) }
+const wireframeBase = new WeakMap<THREE.Material, {opacity: number; transparent: boolean; depthWrite: boolean}>()
+const lastWireCamera = new THREE.Matrix4()
+const lastWireProjection = new THREE.Matrix4()
+let lastWireHeight = -1
+let wireframeDirty = true
+function applyWireframeMaterials() {
+  wireframeDirty = true
+  content?.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) return
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+      if (!(material instanceof THREE.MeshStandardMaterial)) continue
+      let base = wireframeBase.get(material)
+      if (!base) {
+        base = {opacity:material.opacity,transparent:material.transparent,depthWrite:material.depthWrite}
+        wireframeBase.set(material,base)
+      }
+      material.wireframe = props.wireframe
+      material.transparent = props.wireframe || base.transparent
+      material.depthWrite = props.wireframe ? false : base.depthWrite
+      material.opacity = base.opacity
+      material.needsUpdate = true
+    }
+  })
+}
+const wireCenter = new THREE.Vector3()
+function updateAdaptiveWireframe() {
+  if (!props.wireframe || !camera || !renderer || !content) return
+  const viewCamera = camera
+  const height = renderer.domElement.clientHeight
+  viewCamera.updateMatrixWorld()
+  if (!wireframeDirty && height === lastWireHeight && lastWireCamera.equals(viewCamera.matrixWorld) && lastWireProjection.equals(viewCamera.projectionMatrix)) return
+  lastWireCamera.copy(viewCamera.matrixWorld)
+  lastWireProjection.copy(viewCamera.projectionMatrix)
+  lastWireHeight = height
+  wireframeDirty = false
+  content.updateWorldMatrix(true,true)
+  content.traverse(object => {
+    if (!(object instanceof THREE.Mesh) || !isVisible(object)) return
+    const geometry = object.geometry
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere()
+    const sphere = geometry.boundingSphere
+    if (!sphere) return
+    wireCenter.copy(sphere.center).applyMatrix4(object.matrixWorld)
+    const radius = sphere.radius * object.matrixWorld.getMaxScaleOnAxis()
+    const projectedDiameter = viewCamera instanceof THREE.PerspectiveCamera
+      ? radius * height / (Math.max(viewCamera.near, viewCamera.position.distanceTo(wireCenter)) * Math.tan(THREE.MathUtils.degToRad(viewCamera.fov / 2)))
+      : 2 * radius * height * viewCamera.zoom / (viewCamera.top - viewCamera.bottom)
+    const triangles = (geometry.index?.count ?? geometry.getAttribute('position')?.count ?? 0) / 3
+    const opacity = wireframeOpacity(projectedDiameter,triangles)
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+      const base = wireframeBase.get(material)
+      if (base) material.opacity = base.opacity * opacity
+    }
+  })
+}
+function updateWireframe() { pipeline?.setIndirect(props.wireframe ? 0 : normalizeViewportSettings(props.renderMode, props.settings).indirectIntensity); pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;applyWireframeMaterials() }
 function updateSelection() {
   if (!scene) return
   selectedObject = undefined
@@ -419,7 +476,7 @@ onMounted(()=>{
   grid=new THREE.GridHelper(100,100,0x42454b,0x26292e);grid.visible=props.showGrid;scene.add(grid)
   renderer.domElement.addEventListener('click',click);renderer.domElement.addEventListener('pointerdown',pointerDown);renderer.domElement.addEventListener('pointerdown',cancelCameraTween);renderer.domElement.addEventListener('wheel',cancelCameraTween)
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
-  const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild();void rebuildRails()
+  const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();updateAdaptiveWireframe();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild();void rebuildRails()
 })
 watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
 watch(()=>JSON.stringify(props.guides),()=>{rebuildGuides();void rebuildRails()})
