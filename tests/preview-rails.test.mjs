@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { loadPreviewRail, railSegmentPositions, repeatRailModel } from '../src/lib/preview-rails.ts'
+import { builtInRailInterval, builtInRails } from '../src/lib/rail-preview-options.ts'
 
 test('track coverage follows the complete consist in metres and rejects unbounded allocation', () => {
   const positions = railSegmentPositions([{ z: -30, length: 20 }, { z: 0, length: 20 }], .6)
@@ -26,6 +27,19 @@ test('bundled complete rail model repeats along Z without duplicating or scaling
   assert.ok(bounds.min.z <= -2 && bounds.max.z >= 22)
   assert.equal(source.parent, null, 'source stays separately owned')
   assert.equal(tracks.children[0].children[0].geometry, source.children[0].geometry, 'segments share geometry')
+})
+
+test('all bundled rail variants repeat on the same 0.6 metre pitch', () => {
+  assert.equal(builtInRailInterval, .6)
+  assert.equal(builtInRails.length, 3)
+  for (const variant of builtInRails) {
+    const source = new OBJLoader().parse(fs.readFileSync(new URL(`../public/models/${variant.model}`, import.meta.url), 'utf8'))
+    assert.ok(fs.existsSync(new URL(`../public/models/${variant.texture}`, import.meta.url)))
+    const tracks = repeatRailModel(source, [{ z: 0, length: 3 }])
+    assert.ok(tracks.children.length > 2, variant.id)
+    assert.ok(Math.abs(tracks.children[1].position.z - tracks.children[0].position.z - .6) < 1e-10, variant.id)
+    source.traverse(object => { if (object instanceof THREE.Mesh) { object.geometry.dispose(); object.material.dispose() } })
+  }
 })
 
 
@@ -54,6 +68,20 @@ test('default rail texture preserves Metasequoia top-left UVs like imported GLB 
     THREE.TextureLoader.prototype.loadAsync = textureLoad
     source.traverse(object => { if (object instanceof THREE.Mesh) { object.geometry.dispose(); object.material.dispose() } })
     texture.dispose()
+  }
+})
+
+test('each bundled rail selects its own model and texture', async () => {
+  const requested = []
+  const objLoad = OBJLoader.prototype.loadAsync, textureLoad = THREE.TextureLoader.prototype.loadAsync
+  OBJLoader.prototype.loadAsync = async url => { requested.push(url); return new THREE.Group() }
+  THREE.TextureLoader.prototype.loadAsync = async url => { requested.push(url); return new THREE.Texture() }
+  try {
+    for (const variant of builtInRails) await loadPreviewRail(variant.id)
+    assert.deepEqual(requested, builtInRails.flatMap(variant => [`/models/${variant.model}`, `/models/${variant.texture}`]))
+  } finally {
+    OBJLoader.prototype.loadAsync = objLoad
+    THREE.TextureLoader.prototype.loadAsync = textureLoad
   }
 })
 

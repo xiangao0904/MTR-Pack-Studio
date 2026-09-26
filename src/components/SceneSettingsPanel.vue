@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '../i18n'
 import { defaultViewportSettings, renderModes, type PreviewRenderMode, type ViewportSettings } from '../lib/viewport-settings'
+import { builtInRails } from '../lib/rail-preview-options'
 
 const props = defineProps<{
   mode: PreviewRenderMode
@@ -46,7 +47,7 @@ function reset() {
       <label class="scene-check"><span>{{ t('grid') }}</span><input type="checkbox" :checked="showGrid" @change="emit('update:showGrid', ($event.target as HTMLInputElement).checked)" /></label>
       <label class="scene-check"><span>{{ t('wireframe') }}</span><input type="checkbox" :checked="wireframe" @change="emit('update:wireframe', ($event.target as HTMLInputElement).checked)" /></label>
       <label class="scene-check"><span>{{ t('showRails') }}</span><input type="checkbox" :checked="showRails" @change="emit('update:showRails', ($event.target as HTMLInputElement).checked)" /></label>
-      <label class="scene-select"><span>{{ t('previewRailModel') }}</span><select :value="railModelId" @change="emit('update:railModelId', ($event.target as HTMLSelectElement).value)"><option value="">{{ t('builtInRail') }}</option><option v-for="rail in railOptions" :key="rail.id" :value="rail.id">{{ rail.name }}</option></select></label>
+      <label class="scene-select"><span>{{ t('previewRailModel') }}</span><select :value="railModelId" @change="emit('update:railModelId', ($event.target as HTMLSelectElement).value)"><optgroup :label="t('builtInTracks')"><option v-for="rail in builtInRails" :key="rail.id" :value="rail.id">{{ t(rail.label) }}</option></optgroup><optgroup v-if="railOptions.length" :label="t('projectTracks')"><option v-for="rail in railOptions" :key="rail.id" :value="rail.id">{{ rail.name }}</option></optgroup></select></label>
       <label v-if="mode === 'material'" class="scene-check"><span>{{ t('ground') }}</span><input type="checkbox" :checked="settings.ground" @change="update('ground', ($event.target as HTMLInputElement).checked)" /></label>
     </div>
     <div class="scene-section">

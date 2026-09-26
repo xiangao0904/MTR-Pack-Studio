@@ -1,11 +1,11 @@
 // Keep UI copy separate from components for future locale support.
 const en = {
-  previewRailModel: 'Track model', builtInRail: 'Built-in track',
+  previewRailModel: 'Track model', builtInRail: 'Standard track', builtInSleeperRail: 'Sleeper track', builtInSidingRail: 'Siding track', builtInTracks: 'Built-in tracks', projectTracks: 'Project tracks',
   sceneSettings: 'Scene settings', sceneDisplay: 'Display', sceneLighting: 'Lighting', sceneQuality: 'Quality', resizeScenePanel: 'Resize scene settings panel',
   desktopModelImport: 'Open the desktop app to import your own OBJ, FBX or MQO model.',
   rail: 'Rail', rails: 'Rails', newRail: 'New Rail', createRail: 'Create Rail', railName: 'Rail name', railNamePlaceholder: 'Ballasted track',
   railTypeHint: 'Create track models, textures and repeating segments.', railEditorHint: 'Edit a repeating track segment. One unit equals one metre.',
-  showRails: 'Rails', railPreviewLoadFailed: 'Could not load the default track preview.',
+  showRails: 'Rails', railPreviewLoadFailed: 'Could not load the track preview.',
   railRepeatInterval: 'Repeat interval (m)', railRepeatHint: 'Distance between consecutive copies along +Z. Match the length of your model segment.',
   railPreviewRepeats: 'Preview segments', defaultRailModel: 'Add default rail', railModels: 'Rail models',
   deleteRail: 'Delete rail', confirmDeleteRail: 'Delete this rail from the project?',

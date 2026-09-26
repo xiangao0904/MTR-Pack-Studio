@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { loadPreviewRail, repeatRailModel } from '../lib/preview-rails'
+import { type BuiltInRailId } from '../lib/rail-preview-options'
 import { PreviewRenderer, filterModelTextures, prepareMaterialTextures } from '../lib/preview-renderer'
 import { PreviewEnvironment, type PreviewLightingMood } from '../lib/preview-environment'
 import type { PreviewRenderMode, ViewportSettings } from '../lib/viewport-settings'
@@ -15,7 +16,7 @@ import { t } from '../i18n'
 export interface PreviewTransform { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] }
 export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; renderStage?: RenderStage; partRenderStages?: Record<string,RenderStage>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
 export interface PreviewGuide { key: string; length: number; width: number; z: number; reversed: boolean }
-const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; groundHeight?: number; previewRail?: RailDefinition; showRails?: boolean; showGrid?: boolean; wireframe?: boolean; vehicleLightsOn?: boolean; thumbnailCarriageId?: string; thumbnailModelSignature?: string; thumbnailSavedSignature?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { showRails: false, showGrid: true, wireframe: false, vehicleLightsOn: true, renderMode: 'studio' })
+const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; groundHeight?: number; previewRail?: RailDefinition; builtInRailId?: BuiltInRailId; showRails?: boolean; showGrid?: boolean; wireframe?: boolean; vehicleLightsOn?: boolean; thumbnailCarriageId?: string; thumbnailModelSignature?: string; thumbnailSavedSignature?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { builtInRailId: '', showRails: false, showGrid: true, wireframe: false, vehicleLightsOn: true, renderMode: 'studio' })
 const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, signature: string, bytes: Uint8Array] }>()
 const host = ref<HTMLDivElement>()
 const modeTransitionKey = ref(0)
@@ -192,11 +193,11 @@ async function rebuildRails() {
   if (!scene || disposed) return
   const version = ++railGeneration
   const rail = props.previewRail
-  const key = JSON.stringify(rail || null)
+  const key = JSON.stringify(rail ?? props.builtInRailId)
   let replacement: THREE.Group | undefined
   try {
     if (props.showRails && (!railSource || railSourceKey !== key)) {
-      replacement = rail ? await loadProjectRail(rail) : await loadPreviewRail()
+      replacement = rail ? await loadProjectRail(rail) : await loadPreviewRail(props.builtInRailId)
       if (disposed || version !== railGeneration) { disposeObject(replacement); return }
     }
     // Restore materials before detaching or disposing shared segment resources.
@@ -422,7 +423,7 @@ onMounted(()=>{
 })
 watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn,props.thumbnailCarriageId,props.thumbnailModelSignature]),()=>void rebuild())
 watch(()=>JSON.stringify(props.guides),()=>{rebuildGuides();void rebuildRails()})
-watch(()=>[props.showRails,JSON.stringify(props.previewRail)],()=>void rebuildRails())
+watch(()=>[props.showRails,JSON.stringify(props.previewRail),props.builtInRailId],()=>void rebuildRails())
 watch(()=>props.groundHeight,updateEnvironment)
 watch(()=>[props.selectedPart,props.selectedLayer,props.selectedInstanceKey],updateSelection)
 watch(()=>props.cameraView,changeCamera)

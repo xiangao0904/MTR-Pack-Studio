@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
+import { builtInRailInterval, builtInRails, type BuiltInRailId } from './rail-preview-options.ts'
 
 export interface RailGuide { z: number; length: number }
 
@@ -15,10 +16,10 @@ export function railSegmentPositions(guides: RailGuide[], segmentLength: number)
   return Array.from({ length: end - start + 1 }, (_, index) => (start + index) * segmentLength)
 }
 
-/** The supplied OBJ is a complete two-rail/sleeper section, in metres along Z. */
+/** Repeat a built-in 0.6 m track segment or a project segment along Z. */
 export function repeatRailModel(source: THREE.Group, guides: RailGuide[], repeatInterval?: number): THREE.Group {
   const bounds = new THREE.Box3().setFromObject(source)
-  const positions = railSegmentPositions(guides, repeatInterval ?? (bounds.max.z - bounds.min.z))
+  const positions = railSegmentPositions(guides, repeatInterval ?? builtInRailInterval)
   const group = new THREE.Group()
   group.name = 'Preview tracks'
   group.position.y = -0.75
@@ -31,10 +32,11 @@ export function repeatRailModel(source: THREE.Group, guides: RailGuide[], repeat
   return group
 }
 
-export async function loadPreviewRail(): Promise<THREE.Group> {
-  const model = await new OBJLoader().loadAsync('/models/rail.obj')
+export async function loadPreviewRail(id: BuiltInRailId = ''): Promise<THREE.Group> {
+  const variant = builtInRails.find(rail => rail.id === id) ?? builtInRails[0]
+  const model = await new OBJLoader().loadAsync(`/models/${variant.model}`)
   try {
-    const texture = await new THREE.TextureLoader().loadAsync('/models/rail_base_color.png')
+    const texture = await new THREE.TextureLoader().loadAsync(`/models/${variant.texture}`)
     // Metasequoia stores top-left UVs, matching the normalized GLB pipeline.
     texture.flipY = false
     texture.colorSpace = THREE.SRGBColorSpace
