@@ -33,6 +33,8 @@ export async function loadPreviewRail(): Promise<THREE.Group> {
   const model = await new OBJLoader().loadAsync('/models/rail.obj')
   try {
     const texture = await new THREE.TextureLoader().loadAsync('/models/rail_base_color.png')
+    // Metasequoia stores top-left UVs, matching the normalized GLB pipeline.
+    texture.flipY = false
     texture.colorSpace = THREE.SRGBColorSpace
     const material = new THREE.MeshStandardMaterial({ map: texture, roughness: .85, metalness: .1 })
     model.traverse(object => {

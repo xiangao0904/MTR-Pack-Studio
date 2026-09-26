@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
-import { railSegmentPositions, repeatRailModel } from '../src/lib/preview-rails.ts'
+import { loadPreviewRail, railSegmentPositions, repeatRailModel } from '../src/lib/preview-rails.ts'
 
 test('track coverage follows the complete consist in metres and rejects unbounded allocation', () => {
   const positions = railSegmentPositions([{ z: -30, length: 20 }, { z: 0, length: 20 }], .6)
@@ -27,4 +27,33 @@ test('bundled complete rail model repeats along Z without duplicating or scaling
   assert.equal(source.parent, null, 'source stays separately owned')
   assert.equal(tracks.children[0].children[0].geometry, source.children[0].geometry, 'segments share geometry')
   assert.ok(bounds.min.y > -1.02, 'existing Minecraft floor does not cover rail geometry')
+})
+
+
+test('default rail texture preserves Metasequoia top-left UVs like imported GLB previews', async () => {
+  const obj = fs.readFileSync(new URL('../public/models/rail.obj', import.meta.url), 'utf8')
+  assert.ok(obj.startsWith('# Created by Metasequoia'))
+  const source = new OBJLoader().parse(obj)
+  const texture = new THREE.Texture()
+  const objLoad = OBJLoader.prototype.loadAsync, textureLoad = THREE.TextureLoader.prototype.loadAsync
+  OBJLoader.prototype.loadAsync = async () => source
+  THREE.TextureLoader.prototype.loadAsync = async () => texture
+  try {
+    const loaded = await loadPreviewRail()
+    assert.equal(loaded, source)
+    assert.equal(texture.flipY, false)
+    assert.equal(texture.colorSpace, THREE.SRGBColorSpace)
+    loaded.traverse(object => {
+      if (object instanceof THREE.Mesh) {
+        assert.equal(object.material.map, texture)
+        assert.equal(object.castShadow, true)
+        assert.equal(object.receiveShadow, true)
+      }
+    })
+  } finally {
+    OBJLoader.prototype.loadAsync = objLoad
+    THREE.TextureLoader.prototype.loadAsync = textureLoad
+    source.traverse(object => { if (object instanceof THREE.Mesh) { object.geometry.dispose(); object.material.dispose() } })
+    texture.dispose()
+  }
 })
