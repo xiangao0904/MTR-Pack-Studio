@@ -18,6 +18,7 @@ export interface ModelLayer { id: string; name: string; assetId: string; flipTex
 export interface CarriageDefinition { thumbnailHash?: string; thumbnailModelSignature?: string; id: string; exportId: string; name: string; length: number; width: number; bogie1Position: number; bogie2Position: number; couplingPadding1: number; couplingPadding2: number; end1: EndConfiguration; end2: EndConfiguration; placement: CarPlacementRule; bodyModels: ModelLayer[]; bogie1Models: ModelLayer[]; bogie2Models: ModelLayer[] }
 export interface PreviewCarriage { carriageId: string; reversed: boolean }
 export interface TrainDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; tags: string[]; mtr3BaseTrainType: string; carriages: CarriageDefinition[]; previewConsist: PreviewCarriage[] }
+export interface RailDefinition { id: string; revision: number; exportId: string; name: string; description: string; repeatInterval: number; models: ModelLayer[] }
 export type ModelFormat = 'obj' | 'fbx' | 'mqo'
 export interface ModelPartSummary { id: string; name: string; triangleCount: number }
 export interface ModelMaterial { id: string; name: string; color: [number, number, number, number]; texture?: string; properties?: MaterialProperties }
@@ -27,7 +28,7 @@ export interface TextureCatalogItem { hash: string; name: string; width: number;
 export interface AssetCatalog { models: ModelCatalogItem[]; textures: TextureCatalogItem[] }
 export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
 export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo'; onlyVisible?: boolean }
-export interface ValidationIssue { severity: 'error' | 'warning'; message: string; trainId?: string; carriageId?: string; layerId?: string | null; field?: string }
+export interface ValidationIssue { severity: 'error' | 'warning'; message: string; trainId?: string; railId?: string; carriageId?: string; layerId?: string | null; field?: string }
 export interface ExportReport { path: string; fileCount: number; warnings: ValidationIssue[] }
 
 let browserActivePath = ''
@@ -168,7 +169,7 @@ export async function importModel(trainId: string, carriageId: string, slot: 'bo
 
 export async function listAssets(path = browserActivePath): Promise<AssetCatalog> {
   if (inTauri()) return invoke<AssetCatalog>('list_assets')
-  const models = await Promise.all(['fixture-studio-train','fixture-studio-bogie'].map(async id => {
+  const models = await Promise.all(['fixture-studio-train','fixture-studio-bogie','fixture-default-rail'].map(async id => {
     const asset = await getModelAsset(id)
     const project = await getProject(path)
     const references: string[] = []
@@ -176,11 +177,13 @@ export async function listAssets(path = browserActivePath): Promise<AssetCatalog
       const train = await getTrain(path,entry.id)
       for(const car of train.carriages)for(const layer of [...car.bodyModels,...car.bogie1Models,...car.bogie2Models])if(layer.assetId===id)references.push(`${train.name} / ${car.name} / ${layer.name}`)
     }
+    for(const entry of project.content.filter(item=>item.kind==='rail')) { const rail=await getRail(path,entry.id); for(const layer of rail.models) if(layer.assetId===id) references.push(`${rail.name} / ${layer.name}`) }
     return {id,name:asset.name,sourceFormat:asset.sourceFormat,partCount:asset.parts.length,triangleCount:asset.parts.reduce((total,part)=>total+part.triangleCount,0),thumbnailHash:browserThumbnails(path)[id],references}
   }))
   const textures=browserTextures(path)
   const project=await getProject(path)
   for(const texture of textures){texture.references=[];for(const entry of project.content.filter(item=>item.kind==='train')){const train=await getTrain(path,entry.id);for(const car of train.carriages)for(const layer of [...car.bodyModels,...car.bogie1Models,...car.bogie2Models])for(const binding of layer.materialBindings)if(binding.textureAssetId===texture.hash||Object.values(binding.properties?.maps||{}).includes(texture.hash))texture.references.push(`${train.name} / ${car.name} / ${layer.name}`)}}
+  for(const entry of project.content.filter(item=>item.kind==='rail')) { const rail=await getRail(path,entry.id); for(const texture of textures) for(const layer of rail.models) for(const binding of layer.materialBindings) if(binding.textureAssetId===texture.hash||Object.values(binding.properties?.maps||{}).includes(texture.hash)) texture.references.push(`${rail.name} / ${layer.name}`) }
   return {models,textures}
 }
 
@@ -219,13 +222,13 @@ export async function storeAssetThumbnail(assetId:string,bytes:Uint8Array):Promi
 }
 
 export async function getModelAsset(assetId: string): Promise<AssetDefinition> {
-  if (!inTauri()) { const name = assetId === 'fixture-studio-train' ? 'studio-train' : assetId === 'fixture-studio-bogie' ? 'studio-bogie' : null; if (!name) throw new Error(t('missingModel')); const asset: AssetDefinition = await (await fetch(`/fixtures/${name}.json`)).json(); asset.warnings = [t('browserDemoModels')]; return asset }
+  if (!inTauri()) { const name = assetId === 'fixture-studio-train' ? 'studio-train' : assetId === 'fixture-studio-bogie' ? 'studio-bogie' : assetId === 'fixture-default-rail' ? 'default-rail' : null; if (!name) throw new Error(t('missingModel')); const asset: AssetDefinition = await (await fetch(`/fixtures/${name}.json`)).json(); asset.warnings = [t('browserDemoModels')]; return asset }
   const [asset, materials] = await Promise.all([invoke<AssetDefinition>('get_model_asset', { assetId }), invoke<ModelMaterial[]>('get_model_materials', { assetId })]); return { ...asset, materials }
 }
 
 export async function getModelPreview(assetId: string, materialBindings: MaterialBinding[] = []): Promise<ArrayBuffer> {
   if (!inTauri()) {
-    const asset = await getModelAsset(assetId); const name = asset.id === 'fixture-studio-train' ? 'studio-train' : 'studio-bogie'
+    const asset = await getModelAsset(assetId); const name = asset.id === 'fixture-studio-train' ? 'studio-train' : asset.id === 'fixture-default-rail' ? 'default-rail' : 'studio-bogie'
     const source = await (await fetch(`/fixtures/${name}.glb`)).arrayBuffer()
     const replacements: {materialId: string; bytes: ArrayBuffer; channel?: string}[] = []
     for (const binding of materialBindings) {
@@ -327,4 +330,61 @@ export async function getImageAsset(hash: string): Promise<ArrayBuffer> {
   if (inTauri()) return invoke<ArrayBuffer>('get_image_asset', { hash })
   const data = localStorage.getItem(`mtr-pack-studio:image:${hash}`); if (!data) throw new Error(t('imageReadFailed'))
   return (await fetch(data)).arrayBuffer()
+}
+
+export async function createRail(path: string, name: string): Promise<ContentEntry> {
+  const exportId = slug(name, 'rail')
+  if (inTauri()) return invoke('create_rail', { name, exportId })
+  const project = await getProject(path)
+  for (const entry of project.content.filter(item => item.kind === 'rail')) {
+    const rail = await getRail(path, entry.id)
+    if (rail.name.toLowerCase() === name.toLowerCase() || rail.exportId === exportId) throw new Error(t('railDuplicate'))
+  }
+  const rail: RailDefinition = { id: crypto.randomUUID(), revision: 1, name, exportId, description: '', repeatInterval: .6, models: [] }
+  const entry: ContentEntry = { id: rail.id, kind: 'rail', name, file: `content/rails/${rail.id}.json`, updatedAt: Date.now() }
+  project.content.push(entry)
+  localStorage.setItem(`${dataKey(path)}:rail:${rail.id}`, JSON.stringify(rail))
+  localStorage.setItem(dataKey(path), JSON.stringify(project))
+  return entry
+}
+export async function getRail(path: string, railId: string): Promise<RailDefinition> {
+  if (inTauri()) return invoke('get_rail', { railId })
+  const value = localStorage.getItem(`${dataKey(path)}:rail:${railId}`)
+  if (!value) throw new Error(t('railMissing'))
+  return JSON.parse(value)
+}
+export async function updateRail(path: string, rail: RailDefinition, expectedRevision: number): Promise<RailDefinition> {
+  if (inTauri()) return invoke('update_rail', { rail, expectedRevision })
+  if (!rail.name.trim() || !/^[a-z0-9_.-]{1,80}$/.test(rail.exportId) || !Number.isFinite(rail.repeatInterval) || rail.repeatInterval <= 0 || rail.repeatInterval > 100) throw new Error(t('railInvalid'))
+  const current = await getRail(path, rail.id)
+  if (current.revision !== expectedRevision) throw new Error(t('railConflict'))
+  const project = await getProject(path)
+  for (const entry of project.content.filter(item => item.kind === 'rail' && item.id !== rail.id)) {
+    const other = await getRail(path, entry.id)
+    if (other.name.toLowerCase() === rail.name.toLowerCase() || other.exportId === rail.exportId) throw new Error(t('railDuplicate'))
+  }
+  const updated = { ...rail, revision: expectedRevision + 1 }
+  const entry = project.content.find(item => item.id === rail.id)
+  if (entry) { entry.name = updated.name; entry.updatedAt = Date.now() }
+  localStorage.setItem(`${dataKey(path)}:rail:${rail.id}`, JSON.stringify(updated))
+  localStorage.setItem(dataKey(path), JSON.stringify(project))
+  return updated
+}
+export async function deleteRail(path: string, railId: string): Promise<void> {
+  if (inTauri()) return invoke('delete_rail', { railId })
+  const project = await getProject(path)
+  project.content = project.content.filter(item => item.id !== railId)
+  localStorage.setItem(dataKey(path), JSON.stringify(project))
+  localStorage.removeItem(`${dataKey(path)}:rail:${railId}`)
+}
+export async function importRailModel(projectPath: string, railId: string, path: string | null, dependencyOverrides: Record<string,string>, expectedRevision: number): Promise<{ rail: RailDefinition; asset: AssetDefinition }> {
+  if (inTauri()) {
+    const result = await invoke<{rail: RailDefinition; asset: AssetDefinition}>(path === null ? 'import_default_rail_model' : 'import_rail_model', { railId, path, dependencyOverrides, expectedRevision })
+    result.asset = await getModelAsset(result.asset.id)
+    return result
+  }
+  const asset = await getModelAsset('fixture-default-rail')
+  const rail = await getRail(projectPath, railId)
+  rail.models.push({ id: crypto.randomUUID(), name: asset.name, assetId: asset.id, visible: true, flipTextureV: false, materialBindings: [], partRules: {} })
+  return { rail: await updateRail(projectPath, rail, expectedRevision), asset }
 }

@@ -50,3 +50,23 @@ test('consist repeats definitions and reversal swaps coupling ends', () => {
   assert.equal(positions[0].carriage,positions[1].carriage)
   assert.equal(positions[1].reversed,true)
 })
+
+
+test('discard waits for an in-flight save without starting a dirty save', async () => {
+  let writes = 0, release
+  const gate = new Promise(resolve => { release = resolve })
+  const queue = new SaveQueue(async () => { writes++; await gate })
+  queue.markDirty()
+  await queue.waitForIdle()
+  assert.equal(writes, 0)
+  const saving = queue.flush()
+  await Promise.resolve()
+  let idle = false
+  const waiting = queue.waitForIdle().then(() => { idle = true })
+  await Promise.resolve()
+  assert.equal(idle, false)
+  release()
+  await Promise.all([saving, waiting])
+  assert.equal(idle, true)
+  assert.equal(writes, 1)
+})

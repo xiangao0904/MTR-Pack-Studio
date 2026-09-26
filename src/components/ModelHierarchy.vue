@@ -5,7 +5,7 @@ import { t } from '../i18n'
 import type { AssetDefinition, ModelLayer } from '../lib/projects'
 import { buildPartTree, flattenPartTree } from '../lib/model-tree'
 
-const props = defineProps<{ storageKey: string; name: string; layers: ModelLayer[]; assets: Record<string, AssetDefinition>; query: string; selectedLayer: string; selectedPart: string }>()
+const props = defineProps<{ storageKey: string; name: string; rootLabel?: string; layers: ModelLayer[]; assets: Record<string, AssetDefinition>; query: string; selectedLayer: string; selectedPart: string }>()
 const emit = defineEmits<{ select: [layerId: string, partId?: string]; visibility: [layerId: string | null, partIds?: string[]] }>()
 const collapsed = ref(new Set<string>())
 watch(() => props.storageKey, key => { try { collapsed.value = new Set(JSON.parse(localStorage.getItem(key) || '[]')) } catch { collapsed.value = new Set() } }, { immediate: true })
@@ -35,7 +35,7 @@ watch(() => [props.selectedLayer, props.selectedPart], revealSelection)
     <div class="tree-head"><span>{{ t('fieldName') }}</span><span>{{ t('type') }}</span><span>{{ t('visible') }}</span></div>
     <div class="tree-row" role="treeitem" :aria-expanded="rootOpen">
       <span class="node-name"><button class="disclosure" :aria-label="`${rootOpen ? t('collapse') : t('expand')} ${name}`" @click="toggle('root')"><component :is="rootOpen ? ChevronDown : ChevronRight" :size="14" /></button><Box :size="15" /><strong>{{ name }}</strong></span>
-      <small>{{ t('carriage') }}</small><button class="eye" :disabled="!layers.length" :aria-label="`${t('toggleVisibility')} ${name}`" :aria-pressed="layers.some(layer => layer.visible)" @click="emit('visibility', null)"><component :is="layers.some(layer => layer.visible) ? Eye : EyeOff" :size="15" /></button>
+      <small>{{ rootLabel || t('carriage') }}</small><button class="eye" :disabled="!layers.length" :aria-label="`${t('toggleVisibility')} ${name}`" :aria-pressed="layers.some(layer => layer.visible)" @click="emit('visibility', null)"><component :is="layers.some(layer => layer.visible) ? Eye : EyeOff" :size="15" /></button>
     </div>
     <Transition name="tree-expand"><div v-if="rootOpen" role="group" class="tree-branch">
       <template v-for="layer in visibleLayers" :key="layer.id">

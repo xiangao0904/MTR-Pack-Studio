@@ -1,5 +1,15 @@
 // Keep UI copy separate from components for future locale support.
 const en = {
+  rail: 'Rail', rails: 'Rails', newRail: 'New Rail', createRail: 'Create Rail', railName: 'Rail name', railNamePlaceholder: 'Ballasted track',
+  railTypeHint: 'Create track models, textures and repeating segments.', railEditorHint: 'Edit a repeating track segment. One unit equals one metre.',
+  showRails: 'Rails', railPreviewLoadFailed: 'Could not load the default track preview.',
+  railRepeatInterval: 'Repeat interval (m)', railRepeatHint: 'Distance between consecutive copies along +Z. Match the length of your model segment.',
+  railPreviewRepeats: 'Preview segments', defaultRailModel: 'Add default rail', railModels: 'Rail models',
+  deleteRail: 'Delete rail', confirmDeleteRail: 'Delete this rail from the project?',
+  railMissing: 'The rail could not be found.', railConflict: 'This rail changed since it was opened. Reload it before saving again.',
+  railInvalid: 'Enter a name, a valid export ID and a positive repeat interval.', reloadRail: 'Reload saved rail',
+  railReloadHint: 'Discard unsaved changes and reload the saved rail?', railLoadFailed: 'Could not load the rail.',
+  railEmpty: 'Add a default rail or import a model to start.', railDuplicate: 'A rail with this name or export ID already exists.',
   metalness:'Metalness', roughness:'Roughness', opacity:'Opacity', emissiveColor:'Emission color', alphaMode:'Transparency', alphaOpaque:'Opaque', alphaMask:'Cutout', alphaBlend:'Transparent', alphaCutoff:'Cutout threshold', doubleSided:'Double sided', normalScale:'Normal strength', resetMaterial:'Reset material', noTexture:'No texture', baseColorMap:'Base color', normalMap:'Normal map', metalnessMap:'Metalness map', roughnessMap:'Roughness map', emissiveMap:'Emission map', occlusionMap:'Occlusion map', materialPreviewHint:'All preview modes display textures and PBR materials. PBR channels are saved in the project; game export support depends on the target. Scalar maps use the red channel.',
 
   ambientOcclusion: 'Ambient occlusion', pixelTextures: 'Pixelated textures',

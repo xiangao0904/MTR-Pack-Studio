@@ -7,6 +7,8 @@ export class SaveQueue {
   constructor(write: () => Promise<void>) { this.write = write }
   markDirty() { this.dirty += 1 }
   get pending() { return this.dirty !== this.saved }
+  /** Wait for an existing write before discarding edits, without starting a save. */
+  waitForIdle(): Promise<void> { return this.running ?? Promise.resolve() }
   flush(): Promise<void> {
     if (this.running) return this.running
     this.running = Promise.resolve().then(() => this.drain()).finally(() => { this.running = undefined })
