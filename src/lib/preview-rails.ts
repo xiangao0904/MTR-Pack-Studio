@@ -21,7 +21,7 @@ export function repeatRailModel(source: THREE.Group, guides: RailGuide[], repeat
   const positions = railSegmentPositions(guides, repeatInterval ?? (bounds.max.z - bounds.min.z))
   const group = new THREE.Group()
   group.name = 'Preview tracks'
-  group.position.y = -0.5
+  group.position.y = -0.75
   for (const z of positions) {
     const segment = source.clone(true)
     if (repeatInterval === undefined) segment.position.set(-(bounds.min.x + bounds.max.x) / 2, -bounds.max.y, z - (bounds.min.z + bounds.max.z) / 2)
