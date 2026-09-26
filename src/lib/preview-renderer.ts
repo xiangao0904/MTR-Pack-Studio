@@ -134,9 +134,15 @@ export function filterModelTextures(root: THREE.Object3D, maxAnisotropy: number,
       for (const texture of Object.values(material)) {
         if (!(texture instanceof THREE.Texture) || visited.has(texture) || texture.isRenderTargetTexture) continue
         visited.add(texture)
-        texture.magFilter = pixelated ? THREE.NearestFilter : THREE.LinearFilter
-        texture.minFilter = THREE.LinearMipmapLinearFilter
-        texture.generateMipmaps = true; texture.anisotropy = Math.min(8, maxAnisotropy); texture.needsUpdate = true
+        const magFilter = pixelated ? THREE.NearestFilter : THREE.LinearFilter
+        const minFilter = THREE.LinearMipmapLinearFilter
+        const anisotropy = Math.min(8, maxAnisotropy)
+        if (texture.magFilter === magFilter && texture.minFilter === minFilter && texture.generateMipmaps && texture.anisotropy === anisotropy) continue
+        texture.magFilter = magFilter
+        texture.minFilter = minFilter
+        texture.generateMipmaps = true
+        texture.anisotropy = anisotropy
+        texture.needsUpdate = true
       }
     }
   })

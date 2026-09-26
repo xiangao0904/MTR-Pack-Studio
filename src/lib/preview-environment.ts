@@ -68,8 +68,8 @@ export class PreviewEnvironment {
     })
   }
   /** Swap preview geometry while retaining the current sky, ground, lights and environment map. */
-  replaceObjects(previous: THREE.Object3D | undefined, next: THREE.Object3D | undefined, root: THREE.Object3D) {
-    this.detachMaterials(previous)
+  replaceObjects(previous: THREE.Object3D | undefined, next: THREE.Object3D | undefined, root: THREE.Object3D, retainPrevious = false) {
+    if (previous !== next && !retainPrevious) this.detachMaterials(previous)
     this.attachMaterials(next)
     this.bounds.makeEmpty()
     root.updateWorldMatrix(true,true)
@@ -87,6 +87,7 @@ export class PreviewEnvironment {
       light.shadow.needsUpdate=true
     }
   }
+  releaseObjects(root: THREE.Object3D) { this.detachMaterials(root) }
   private clearScenery() {
     if(this.clouds && !this.clouds.parent)this.clouds.dispose()
     for (const light of this.lights) light.shadow.dispose()

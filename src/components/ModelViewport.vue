@@ -172,25 +172,26 @@ async function rebuild() {
   } catch (cause) { complete = false; if (version === generation) emit('error', cause instanceof Error ? cause.message : String(cause)) }
   if (disposed || version !== generation) { if (!cached) disposeCachedContent(group); return }
   if (!cached && complete) contentCache.set(signature,group)
-  pipeline?.clearMaterials()
   selectedObject = undefined
   const previous = content
   if (previous) previewRoot.remove(previous)
   content = group; previewRoot.add(content)
   activeContentSignature = signature
-  environment?.replaceObjects(previous,content,previewRoot)
-  if (previous && previous !== content && ![...contentCache.values()].includes(previous)) disposeCachedContent(previous)
+  const retainPrevious = !!previous && [...contentCache.values()].includes(previous)
+  if (!retainPrevious) pipeline?.clearMaterials()
+  environment?.replaceObjects(previous,content,previewRoot,retainPrevious)
+  if (previous && previous !== content && !retainPrevious) disposeCachedContent(previous)
   if (cached) { contentCache.delete(signature); contentCache.set(signature,cached) }
   applyWireframeMaterials()
   if(renderer)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   if(renderer) renderer.shadowMap.needsUpdate=true
-  rebuildGuides(); updateSelection()
+  updateSelection()
   while (contentCache.size > 4) {
     const oldest = contentCache.keys().next().value
     if (!oldest) break
     const stale = contentCache.get(oldest)!
     contentCache.delete(oldest)
-    if (stale !== content) disposeCachedContent(stale)
+    if (stale !== content) { environment?.releaseObjects(stale);pipeline?.clearMaterials();disposeCachedContent(stale) }
   }
   if (!hasFramedContent && (props.assets.length || props.guides.length)) {
     frameContent(false)
@@ -438,11 +439,13 @@ function applyWireframeMaterials() {
         base = {opacity:material.opacity,transparent:material.transparent,depthWrite:material.depthWrite}
         wireframeBase.set(material,base)
       }
+      const transparent = props.wireframe || base.transparent
+      const depthWrite = props.wireframe ? false : base.depthWrite
+      if (material.wireframe !== props.wireframe || material.transparent !== transparent || material.depthWrite !== depthWrite) material.needsUpdate = true
       material.wireframe = props.wireframe
-      material.transparent = props.wireframe || base.transparent
-      material.depthWrite = props.wireframe ? false : base.depthWrite
+      material.transparent = transparent
+      material.depthWrite = depthWrite
       material.opacity = base.opacity
-      material.needsUpdate = true
     }
   })
 }
@@ -535,7 +538,7 @@ onMounted(()=>{
   grid=new THREE.GridHelper(100,100,0x42454b,0x26292e);grid.visible=props.showGrid;scene.add(grid)
   renderer.domElement.addEventListener('click',click);renderer.domElement.addEventListener('pointerdown',pointerDown);renderer.domElement.addEventListener('pointerdown',cancelCameraTween);renderer.domElement.addEventListener('wheel',cancelCameraTween)
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
-  const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();updateAdaptiveWireframe();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);void rebuild();void rebuildRails()
+  const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();updateAdaptiveWireframe();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);rebuildGuides();void rebuild();void rebuildRails()
 })
 watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn]),()=>void rebuild())
 watch(()=>[props.thumbnailCarriageId,props.thumbnailModelSignature,props.thumbnailSavedSignature],observeThumbnail)

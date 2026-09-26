@@ -14,6 +14,9 @@ test('model filtering smooths minification in both texture modes and respects ha
     assert.equal(texture.generateMipmaps, true)
     assert.equal(texture.anisotropy, 4)
   }
+  const version=map.version
+  filterModelTextures(mesh, 4)
+  assert.equal(map.version,version)
   filterModelTextures(mesh, 16, true)
   assert.equal(map.magFilter, THREE.NearestFilter)
   assert.equal(map.minFilter, THREE.LinearMipmapLinearFilter)

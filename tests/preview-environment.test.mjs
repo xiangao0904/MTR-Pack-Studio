@@ -63,6 +63,28 @@ test('switching model content keeps the same lighting and scenery objects', () =
   f.environment.dispose();next.geometry.dispose();next.material.dispose();f.dispose()
 })
 
+test('cached carriage materials survive switching back and are released on eviction', () => {
+  const f=fixture()
+  f.environment.apply(f.root,'studio')
+  const cachedMaterial=f.mesh.material[0]
+  let disposals=0
+  cachedMaterial.addEventListener('dispose',()=>disposals++)
+  const nextSource=new THREE.MeshStandardMaterial({color:0x7491aa})
+  const next=new THREE.Mesh(new THREE.BoxGeometry(2,2,3),nextSource)
+  f.root.remove(f.mesh);f.root.add(next)
+  f.environment.replaceObjects(f.mesh,next,f.root,true)
+  assert.equal(f.mesh.material[0],cachedMaterial)
+  assert.equal(disposals,0)
+  f.root.remove(next);f.root.add(f.mesh)
+  f.environment.replaceObjects(next,f.mesh,f.root,true)
+  assert.equal(f.mesh.material[0],cachedMaterial)
+  f.environment.releaseObjects(next)
+  assert.equal(next.material,nextSource)
+  f.environment.releaseObjects(f.mesh)
+  assert.equal(disposals,1)
+  f.environment.dispose();next.geometry.dispose();nextSource.dispose();f.dispose()
+})
+
 test('Minecraft ground remains one metre per tile and cleans scenery and shadow targets',()=>{
   const f=fixture();f.mesh.scale.z=45;f.mesh.position.z=300
   f.environment.apply(f.root,'minecraft')
