@@ -22,11 +22,10 @@ test('bundled complete rail model repeats along Z without duplicating or scaling
   assert.ok(Math.abs(sourceBounds.max.x-sourceBounds.min.x-2.337364)<1e-5)
   const tracks = repeatRailModel(source, [{ z: 10, length: 20 }])
   const bounds = new THREE.Box3().setFromObject(tracks)
-  assert.ok(Math.abs(bounds.max.y)<1e-7, 'railhead meets wheel contact plane')
+  assert.ok(Math.abs(bounds.max.y + 1)<1e-7, 'track scenery is lowered by one metre')
   assert.ok(bounds.min.z <= -2 && bounds.max.z >= 22)
   assert.equal(source.parent, null, 'source stays separately owned')
   assert.equal(tracks.children[0].children[0].geometry, source.children[0].geometry, 'segments share geometry')
-  assert.ok(bounds.min.y > -1.02, 'existing Minecraft floor does not cover rail geometry')
 })
 
 
@@ -65,6 +64,7 @@ test('project tracks use their repeat interval and preserve their authored origi
   mesh.position.set(.4, .3, .1)
   source.add(mesh)
   const tracks = repeatRailModel(source, [{z:0,length:6}], 1.25)
+  assert.equal(tracks.position.y, -1, 'project tracks receive the same scene offset')
   assert.ok(tracks.children.length > 2)
   assert.equal(tracks.children[1].position.z - tracks.children[0].position.z, 1.25)
   assert.equal(tracks.children[0].position.x, 0)
