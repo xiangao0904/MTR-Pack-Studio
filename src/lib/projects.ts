@@ -22,7 +22,7 @@ export type ModelFormat = 'obj' | 'fbx' | 'mqo'
 export interface ModelPartSummary { id: string; name: string; triangleCount: number }
 export interface ModelMaterial { id: string; name: string; color: [number, number, number, number]; texture?: string; properties?: MaterialProperties }
 export interface AssetDefinition { materials: ModelMaterial[]; id: string; name: string; sourceFormat: ModelFormat; sourceHash: string; documentHash: string; previewHash: string; dependencies: { name: string; hash: string; mediaType: string }[]; parts: ModelPartSummary[]; warnings: string[]; legacyUvCorrection?: boolean }
-export interface ModelCatalogItem { id: string; name: string; sourceFormat: ModelFormat; partCount: number; triangleCount: number; references: string[] }
+export interface ModelCatalogItem { id: string; name: string; sourceFormat: ModelFormat; partCount: number; triangleCount: number; thumbnailHash?: string; references: string[] }
 export interface TextureCatalogItem { hash: string; name: string; width: number; height: number; references: string[] }
 export interface AssetCatalog { models: ModelCatalogItem[]; textures: TextureCatalogItem[] }
 export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
@@ -35,6 +35,8 @@ const recentKey = 'mtr-pack-studio:recent-projects'
 const inTauri = () => '__TAURI_INTERNALS__' in window
 const dataKey = (path: string) => `mtr-pack-studio:project:${path}`
 const browserTextureKey = (path:string) => `${dataKey(path)}:textures`
+const browserThumbnailKey = (path:string) => `${dataKey(path)}:asset-thumbnails`
+function browserThumbnails(path:string):Record<string,string>{try{return JSON.parse(localStorage.getItem(browserThumbnailKey(path))||'{}') as Record<string,string>}catch{return {}}}
 function browserTextures(path:string):TextureCatalogItem[]{try{return JSON.parse(localStorage.getItem(browserTextureKey(path))||'[]') as TextureCatalogItem[]}catch{return []}}
 
 function browserProjects(): ProjectSummary[] {
@@ -174,7 +176,7 @@ export async function listAssets(path = browserActivePath): Promise<AssetCatalog
       const train = await getTrain(path,entry.id)
       for(const car of train.carriages)for(const layer of [...car.bodyModels,...car.bogie1Models,...car.bogie2Models])if(layer.assetId===id)references.push(`${train.name} / ${car.name} / ${layer.name}`)
     }
-    return {id,name:asset.name,sourceFormat:asset.sourceFormat,partCount:asset.parts.length,triangleCount:asset.parts.reduce((total,part)=>total+part.triangleCount,0),references}
+    return {id,name:asset.name,sourceFormat:asset.sourceFormat,partCount:asset.parts.length,triangleCount:asset.parts.reduce((total,part)=>total+part.triangleCount,0),thumbnailHash:browserThumbnails(path)[id],references}
   }))
   const textures=browserTextures(path)
   const project=await getProject(path)
@@ -207,6 +209,13 @@ export async function deleteAsset(kind:'model'|'texture',id:string):Promise<void
   if(inTauri())return invoke('delete_asset',{kind,id})
   if(kind==='model')throw new Error(t('browserDemoModels'))
   if(kind==='texture'){const items=browserTextures(browserActivePath).filter(item=>item.hash!==id);localStorage.setItem(browserTextureKey(browserActivePath),JSON.stringify(items))}
+}
+
+export async function storeAssetThumbnail(assetId:string,bytes:Uint8Array):Promise<string>{
+  if(inTauri())return invoke<string>('store_asset_thumbnail',{assetId,bytes:Array.from(bytes)})
+  const hash=await storeImageBytes(bytes),items=browserThumbnails(browserActivePath)
+  items[assetId]=hash;localStorage.setItem(browserThumbnailKey(browserActivePath),JSON.stringify(items))
+  return hash
 }
 
 export async function getModelAsset(assetId: string): Promise<AssetDefinition> {

@@ -471,7 +471,7 @@ fn attach_model_asset(state: State<AppState>, train_id: String, carriage_id: Str
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ModelCatalogItem { id: String, name: String, source_format: domain::ModelFormat, part_count: usize, triangle_count: usize, references: Vec<String> }
+struct ModelCatalogItem { id: String, name: String, source_format: domain::ModelFormat, part_count: usize, triangle_count: usize, thumbnail_hash: Option<String>, references: Vec<String> }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TextureCatalogItem { hash: String, name: String, width: u32, height: u32, references: Vec<String> }
@@ -506,7 +506,7 @@ fn asset_catalog(container: &mut Container) -> Result<AssetCatalog, String> {
                 texture_refs.entry(dependency.hash.clone()).or_default().push(format!("{} / {}", asset.name, dependency.name));
             }
         }
-        models.push(ModelCatalogItem { id, name: asset.name, source_format: asset.source_format, part_count: asset.parts.len(), triangle_count: asset.parts.iter().map(|part| part.triangle_count).sum(), references: model_refs.remove(&asset.id).unwrap_or_default() });
+        models.push(ModelCatalogItem { thumbnail_hash: container.index.asset_thumbnail_hashes.get(&id).cloned(), id, name: asset.name, source_format: asset.source_format, part_count: asset.parts.len(), triangle_count: asset.parts.iter().map(|part| part.triangle_count).sum(), references: model_refs.remove(&asset.id).unwrap_or_default() });
     }
     for hash in texture_refs.keys() { names.entry(hash.clone()).or_insert_with(|| "Imported texture".into()); }
     let mut textures = Vec::new();
@@ -565,6 +565,7 @@ fn delete_asset(state: State<AppState>, kind: String, id: String) -> Result<(), 
                 let item = catalog.models.iter().find(|item| item.id == id).ok_or("The selected model asset no longer exists.")?;
                 if !item.references.is_empty() { return Err("Remove this model from every train before deleting it.".into()); }
                 session.container.index.assets.remove(&id);
+                session.container.index.asset_thumbnail_hashes.remove(&id);
             }
             "texture" => {
                 let item = catalog.textures.iter().find(|item| item.hash == id).ok_or("The selected texture no longer exists.")?;
@@ -574,6 +575,26 @@ fn delete_asset(state: State<AppState>, kind: String, id: String) -> Result<(), 
             _ => return Err("Choose a valid asset type.".into()),
         }
         session.container.commit()
+    })();
+    if result.is_err() { session.container.index = previous; }
+    result
+}
+
+#[tauri::command(async)]
+fn store_asset_thumbnail(state: State<AppState>, asset_id: String, bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.len() > 1024 * 1024 { return Err("Model thumbnails must be smaller than 1 MiB.".into()); }
+    let image = image::load_from_memory(&bytes).map_err(|e| format!("Unable to read model thumbnail: {e}"))?;
+    if image.width() != 240 || image.height() != 160 { return Err("Model thumbnails must be 240 × 160 pixels.".into()); }
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let session = active.as_mut().ok_or("No project is open.")?;
+    if !session.container.index.assets.contains_key(&asset_id) { return Err("The selected model asset no longer exists.".into()); }
+    if let Some(hash) = session.container.index.asset_thumbnail_hashes.get(&asset_id) { return Ok(hash.clone()); }
+    let previous = session.container.index.clone();
+    let result = (|| {
+        let hash = session.container.put_blob(&bytes, "image/png")?;
+        session.container.index.asset_thumbnail_hashes.insert(asset_id, hash.clone());
+        session.container.commit()?;
+        Ok(hash)
     })();
     if result.is_err() { session.container.index = previous; }
     result
@@ -798,6 +819,7 @@ pub fn run() {
             list_assets,
             rename_asset,
             delete_asset,
+            store_asset_thumbnail,
             get_model_asset,
             get_model_preview,
             get_model_materials,

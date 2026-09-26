@@ -9,7 +9,7 @@ import ViewportModeControls from './ViewportModeControls.vue'
 import { loadViewportPreferences, type PreviewRenderMode } from '../lib/viewport-settings'
 import { EditorHistory, trainHistorySnapshot } from '../lib/editor-history'
 import { t } from '../i18n'
-import { analyzeModelImport, attachModelAsset, chooseModelDependency, chooseModelFile, chooseTextureFile, importTextureFile, listAssets, storeImageBytes, getImageAsset, getModelAsset, getTrain, importModel, updateTrain, type AssetCatalog, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition, type ValidationIssue } from '../lib/projects'
+import { analyzeModelImport, attachModelAsset, chooseModelDependency, chooseModelFile, chooseTextureFile, deleteAsset, importTextureFile, listAssets, storeImageBytes, getImageAsset, getModelAsset, getTrain, importModel, updateTrain, type AssetCatalog, type AssetDefinition, type CarPlacementRule, type CarriageDefinition, type ContentEntry, type ModelLayer, type TrainDefinition, type ValidationIssue } from '../lib/projects'
 import { arrangeConsist, matchesPlacement } from '../lib/train-preview'
 import { SaveQueue } from '../lib/save-queue'
 import { carriageThumbnailSignature } from '../lib/thumbnail-signature'
@@ -129,7 +129,7 @@ async function flushEdits(){
 }
 async function immediate(action:()=>void){if(train.value)history.record(train.value);action();await flush()}
 function perform(action:()=>void){if(importing.value)return;void immediate(action).catch(()=>{})}
-async function back(){try{await flush();emit('back')}catch{/* keep the editor open */}}
+async function back(){try{await flush();for(const id of replacedAssetCandidates)await pruneReplacedModel(id);emit('back')}catch{/* keep the editor open */}}
 async function focusIssue(issue:ValidationIssue){
   if(issue.carriageId)selectedCarriageId.value=issue.carriageId
   const field=issue.field||'';tab.value=field.includes('placement')||field.includes('partRules')?'placement':/model|asset|texture|material/i.test(field)?'models':field.includes('mtr3')?'mtr3':'general'
@@ -189,6 +189,14 @@ function applyAddedModel(slot:'body'|'bogie1'|'bogie2',asset:AssetDefinition,rep
   if(replace){const index=group.findIndex(item=>item.id===replace.id);added.id=replace.id;added.name=replace.name;added.visible=replace.visible;added.flipTextureV=replace.flipTextureV;added.transform=replace.transform;added.renderStage=replace.renderStage;const materialIds=new Set(asset.materials.map(item=>item.id));const partIds=new Set(asset.parts.map(item=>item.id));added.hiddenParts=(replace.hiddenParts||[]).filter(id=>partIds.has(id));added.partTransforms=Object.fromEntries(Object.entries(replace.partTransforms||{}).filter(([id])=>partIds.has(id)));added.partRenderStages=Object.fromEntries(Object.entries(replace.partRenderStages||{}).filter(([id])=>partIds.has(id)));added.materialBindings=replace.materialBindings.filter(item=>materialIds.has(item.materialId));added.partRules=Object.fromEntries(Object.entries(replace.partRules).filter(([id])=>partIds.has(id)));if(index>=0){group.pop();group.splice(index,1,added)}}
   selectedLayerId.value=added.id
 }
+const replacedAssetCandidates=new Set<string>()
+function queueReplacedModel(previousId:string|undefined,nextId:string){if(previousId&&previousId!==nextId&&!previousId.startsWith('fixture-'))replacedAssetCandidates.add(previousId)}
+async function pruneReplacedModel(previousId:string){
+  try{
+    const old=(await listAssets(props.projectPath)).models.find(item=>item.id===previousId)
+    if(old&&!old.references.length){await deleteAsset('model',previousId);delete assets.value[previousId]}
+  }catch(cause){emit('error',message(cause))}
+}
 async function useAsset(id:string){
   const target=picker.value;if(!target||!train.value)return
   picker.value=undefined;importing.value=true
@@ -197,7 +205,7 @@ async function useAsset(id:string){
       const asset=await getModelAsset(id);await flushEdits()
       const updated=await attachModelAsset(props.projectPath,train.value.id,carriage.value!.id,target.slot,id,train.value.revision)
       hydrating=true;train.value=updated;assets.value[id]=asset;hydrating=false
-      applyAddedModel(target.slot,asset,target.replace);await flushEdits();emit('changed',{...props.entry,updatedAt:Date.now()})
+      applyAddedModel(target.slot,asset,target.replace);await flushEdits();queueReplacedModel(target.replace?.assetId,id);emit('changed',{...props.entry,updatedAt:Date.now()})
     }else{setTextureHash(target.materialId,target.channel,id);await flushEdits()}
   }catch(cause){emit('error',message(cause));emit('status','failed')}
   finally{importing.value=false;hydrating=false}
@@ -212,7 +220,7 @@ async function addModelImpl(slot:'body'|'bogie1'|'bogie2',replace?:ModelLayer){
     while(analysis.missingDependencies.length){for(const missing of analysis.missingDependencies){const name=missing.split(/[\\/]/).pop()||missing;const resolved=await chooseModelDependency(name);if(!resolved)throw new Error(`${t('missingDependencies')}: ${name}`);overrides[name]=resolved}analysis=await analyzeModelImport(path,overrides)}
     const result=await importModel(trainId,carriageId,slot,path,overrides,train.value.revision)
     hydrating=true;train.value=result.train;assets.value[result.asset.id]=result.asset;hydrating=false
-    applyAddedModel(slot,result.asset,replace);await loadAssets();await flushEdits();emit('changed',{...props.entry,updatedAt:Date.now()})
+    applyAddedModel(slot,result.asset,replace);await loadAssets();await flushEdits();queueReplacedModel(replace?.assetId,result.asset.id);emit('changed',{...props.entry,updatedAt:Date.now()})
   }catch(cause){emit('error',message(cause));emit('status','failed')}finally{importing.value=false;hydrating=false}
 }
 function replaceTexture(materialId:string,channel?:TextureChannel){operationPromise=replaceTextureImpl(materialId,channel).finally(()=>{operationPromise=undefined});return operationPromise}

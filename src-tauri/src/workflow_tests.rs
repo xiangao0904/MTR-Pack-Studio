@@ -28,15 +28,20 @@ fn asset_catalog_recovers_model_textures_and_reuses_identical_imports() {
     let first=import_model_asset_into(&mut container,&source,&BTreeMap::new()).unwrap();
     let second=import_model_asset_into(&mut container,&source,&BTreeMap::new()).unwrap();
     assert_eq!(first.id,second.id);assert_eq!(container.index.assets.len(),1);
+    let mut thumbnail=std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(240,160,image::Rgba([40,50,60,255])).write_to(&mut thumbnail,image::ImageFormat::Png).unwrap();
+    let thumbnail_hash=container.put_blob(&thumbnail.into_inner(),"image/png").unwrap();
+    container.index.asset_thumbnail_hashes.insert(first.id.clone(),thumbnail_hash.clone());
     let mut train=TrainDefinition::new("Train","train");train.carriages[0].body_models.push(new_model_layer(&first));
     container.index.content.push(ContentEntry{id:train.id.clone(),kind:"train".into(),name:train.name.clone(),file:"train.json".into(),updated_at:0,resources:vec![]});
     write_train_document(&mut container,0,&train).unwrap();container.commit().unwrap();
     container.index.texture_names.clear(); // Earlier projects had no explicit texture catalog.
     let catalog=asset_catalog(&mut container).unwrap();
     assert_eq!(catalog.models.len(),1);assert_eq!(catalog.models[0].references.len(),1);
+    assert_eq!(catalog.models[0].thumbnail_hash.as_deref(),Some(thumbnail_hash.as_str()));
     assert_eq!(catalog.textures.len(),1);assert_eq!((catalog.textures[0].width,catalog.textures[0].height),(2,3));
     container.commit().unwrap();drop(container);
-    let mut reopened=Container::open(&path).unwrap();assert_eq!(asset_catalog(&mut reopened).unwrap().textures.len(),1);
+    let mut reopened=Container::open(&path).unwrap();let catalog=asset_catalog(&mut reopened).unwrap();assert_eq!(catalog.textures.len(),1);assert_eq!(catalog.models[0].thumbnail_hash.as_deref(),Some(thumbnail_hash.as_str()));
     drop(reopened);fs::remove_dir_all(root).unwrap();
 }
 
