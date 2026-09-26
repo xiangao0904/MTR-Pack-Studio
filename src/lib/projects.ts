@@ -22,6 +22,9 @@ export type ModelFormat = 'obj' | 'fbx' | 'mqo'
 export interface ModelPartSummary { id: string; name: string; triangleCount: number }
 export interface ModelMaterial { id: string; name: string; color: [number, number, number, number]; texture?: string; properties?: MaterialProperties }
 export interface AssetDefinition { materials: ModelMaterial[]; id: string; name: string; sourceFormat: ModelFormat; sourceHash: string; documentHash: string; previewHash: string; dependencies: { name: string; hash: string; mediaType: string }[]; parts: ModelPartSummary[]; warnings: string[]; legacyUvCorrection?: boolean }
+export interface ModelCatalogItem { id: string; name: string; sourceFormat: ModelFormat; partCount: number; triangleCount: number; references: string[] }
+export interface TextureCatalogItem { hash: string; name: string; width: number; height: number; references: string[] }
+export interface AssetCatalog { models: ModelCatalogItem[]; textures: TextureCatalogItem[] }
 export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
 export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo'; onlyVisible?: boolean }
 export interface ValidationIssue { severity: 'error' | 'warning'; message: string; trainId?: string; carriageId?: string; layerId?: string | null; field?: string }
@@ -31,6 +34,8 @@ let browserActivePath = ''
 const recentKey = 'mtr-pack-studio:recent-projects'
 const inTauri = () => '__TAURI_INTERNALS__' in window
 const dataKey = (path: string) => `mtr-pack-studio:project:${path}`
+const browserTextureKey = (path:string) => `${dataKey(path)}:textures`
+function browserTextures(path:string):TextureCatalogItem[]{try{return JSON.parse(localStorage.getItem(browserTextureKey(path))||'[]') as TextureCatalogItem[]}catch{return []}}
 
 function browserProjects(): ProjectSummary[] {
   try { return (JSON.parse(localStorage.getItem(recentKey) || '[]') as ProjectSummary[]).filter(project => project.path.toLowerCase().endsWith('.mtrpack')) } catch { return [] }
@@ -159,6 +164,51 @@ export async function importModel(trainId: string, carriageId: string, slot: 'bo
   return result
 }
 
+export async function listAssets(path = browserActivePath): Promise<AssetCatalog> {
+  if (inTauri()) return invoke<AssetCatalog>('list_assets')
+  const models = await Promise.all(['fixture-studio-train','fixture-studio-bogie'].map(async id => {
+    const asset = await getModelAsset(id)
+    const project = await getProject(path)
+    const references: string[] = []
+    for(const entry of project.content.filter(item=>item.kind==='train')){
+      const train = await getTrain(path,entry.id)
+      for(const car of train.carriages)for(const layer of [...car.bodyModels,...car.bogie1Models,...car.bogie2Models])if(layer.assetId===id)references.push(`${train.name} / ${car.name} / ${layer.name}`)
+    }
+    return {id,name:asset.name,sourceFormat:asset.sourceFormat,partCount:asset.parts.length,triangleCount:asset.parts.reduce((total,part)=>total+part.triangleCount,0),references}
+  }))
+  const textures=browserTextures(path)
+  const project=await getProject(path)
+  for(const texture of textures){texture.references=[];for(const entry of project.content.filter(item=>item.kind==='train')){const train=await getTrain(path,entry.id);for(const car of train.carriages)for(const layer of [...car.bodyModels,...car.bogie1Models,...car.bogie2Models])for(const binding of layer.materialBindings)if(binding.textureAssetId===texture.hash||Object.values(binding.properties?.maps||{}).includes(texture.hash))texture.references.push(`${train.name} / ${car.name} / ${layer.name}`)}}
+  return {models,textures}
+}
+
+export async function importModelAsset(path: string, dependencyOverrides: Record<string,string> = {}): Promise<AssetDefinition> {
+  if (!inTauri()) return getModelAsset('fixture-studio-train')
+  const asset = await invoke<AssetDefinition>('import_model_asset',{path,dependencyOverrides})
+  return {...asset,materials:await invoke<ModelMaterial[]>('get_model_materials',{assetId:asset.id})}
+}
+
+export async function attachModelAsset(path: string, trainId: string, carriageId: string, slot: 'body'|'bogie1'|'bogie2', assetId: string, expectedRevision: number): Promise<TrainDefinition> {
+  if (inTauri()) return invoke<TrainDefinition>('attach_model_asset',{trainId,carriageId,slot,assetId,expectedRevision})
+  const train=await getTrain(path,trainId),carriage=train.carriages.find(item=>item.id===carriageId)
+  if(!carriage)throw new Error(t('noCarriage'))
+  const asset=await getModelAsset(assetId)
+  const layer:ModelLayer={id:crypto.randomUUID(),name:asset.name,assetId,flipTextureV:false,visible:true,materialBindings:[],partRules:{},renderStage:'EXTERIOR',partRenderStages:{}}
+  ;(slot==='body'?carriage.bodyModels:slot==='bogie1'?carriage.bogie1Models:carriage.bogie2Models).push(layer)
+  return updateTrain(path,train,expectedRevision)
+}
+
+export async function renameAsset(kind:'model'|'texture',id:string,name:string):Promise<void>{
+  if(inTauri())return invoke('rename_asset',{kind,id,name})
+  if(kind==='model')throw new Error(t('browserDemoModels'))
+  if(kind==='texture'){const items=browserTextures(browserActivePath),item=items.find(entry=>entry.hash===id);if(item){item.name=name;localStorage.setItem(browserTextureKey(browserActivePath),JSON.stringify(items))}}
+}
+export async function deleteAsset(kind:'model'|'texture',id:string):Promise<void>{
+  if(inTauri())return invoke('delete_asset',{kind,id})
+  if(kind==='model')throw new Error(t('browserDemoModels'))
+  if(kind==='texture'){const items=browserTextures(browserActivePath).filter(item=>item.hash!==id);localStorage.setItem(browserTextureKey(browserActivePath),JSON.stringify(items))}
+}
+
 export async function getModelAsset(assetId: string): Promise<AssetDefinition> {
   if (!inTauri()) { const name = assetId === 'fixture-studio-train' ? 'studio-train' : assetId === 'fixture-studio-bogie' ? 'studio-bogie' : null; if (!name) throw new Error(t('missingModel')); const asset: AssetDefinition = await (await fetch(`/fixtures/${name}.json`)).json(); asset.warnings = [t('browserDemoModels')]; return asset }
   const [asset, materials] = await Promise.all([invoke<AssetDefinition>('get_model_asset', { assetId }), invoke<ModelMaterial[]>('get_model_materials', { assetId })]); return { ...asset, materials }
@@ -246,7 +296,9 @@ export async function chooseTextureFile(): Promise<string | null> {
     const bitmap = await createImageBitmap(file); const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height
     canvas.getContext('2d')!.drawImage(bitmap,0,0); bitmap.close()
     const blob = await new Promise<Blob>((resolve,reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error(t('imageReadFailed'))),'image/png'))
-    return `preview-image:${await storeImageBytes(new Uint8Array(await blob.arrayBuffer()))}`
+    const hash=await storeImageBytes(new Uint8Array(await blob.arrayBuffer()))
+    const items=browserTextures(browserActivePath);if(!items.some(item=>item.hash===hash)){items.push({hash,name:file.name,width:canvas.width,height:canvas.height,references:[]});localStorage.setItem(browserTextureKey(browserActivePath),JSON.stringify(items))}
+    return `preview-image:${hash}`
   }
   return open({ directory: false, multiple: false, title: t('chooseTexture'), filters: [{ name: t('imageFiles'), extensions: ['png','jpg','jpeg','webp'] }] })
 }

@@ -27,7 +27,7 @@ const en = {
   viewAll: 'View all', type: 'Type', lastEdited: 'Last edited', newTrain: 'New Train', createTrain: 'Create Train', trainName: 'Train name',
   trainNamePlaceholder: 'My train', noContent: 'No content yet', noContentHint: 'Create your first train to start building this pack.',
   noTrains: 'No trains yet', noTrainsHint: 'Create a train to add it to this project.', contentSearch: 'Search content...',
-  plannedHint: 'This content type is planned for a future release.', assetsHint: 'Asset management is coming in a future release.',
+  plannedHint: 'This content type is planned for a future release.', assetsHint: 'Import models and textures once, then use them throughout this project.', assetModels: 'Models', assetTextures: 'Textures', searchAssets: 'Search assets...', importModelAsset: 'Import model', importTextureAsset: 'Import texture', assetUses: 'uses', assetUsedBy: 'Used by', assetUnused: 'Not used yet', assetEmpty: 'No assets here yet. Import a model or texture to get started.', chooseFromLibrary: 'Choose from library', importNewModel: 'Import new model', chooseModelSource: 'Add model', chooseTextureSource: 'Choose texture source', noLibraryModels: 'Import a model into the Asset Library first.', noLibraryTextures: 'Import a texture into the Asset Library first.',
   projectSettingsHint: 'Manage your project image, namespace and description.', trainEditorHint: 'The train editor is coming in a future release.',
   trainsHeading: 'Trains', allContentHeading: 'All content',
   contentGroup: 'Content', projectGroup: 'Project', projectLabel: 'PROJECT', itemName: 'NAME', itemType: 'TYPE', itemLastEdited: 'LAST EDITED', retry: 'Retry',
