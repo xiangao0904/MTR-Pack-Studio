@@ -1,6 +1,6 @@
 use crate::{
     container::Container,
-    domain::{AssetDefinition, ModelLayer, ModelTransform, TrainDefinition},
+    domain::{AssetDefinition, ModelLayer, ModelTransform, RailDefinition, TrainDefinition},
     model::{ModelDocument, ModelMaterial, ModelPart},
 };
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,7 @@ pub struct ValidationIssue {
     pub severity: String,
     pub message: String,
     pub train_id: Option<String>,
+    pub rail_id: Option<String>,
     pub carriage_id: Option<String>,
     pub layer_id: Option<String>,
     pub field: Option<String>,
@@ -90,6 +91,7 @@ pub fn validate(
     options: &ExportOptions,
 ) -> Result<Vec<ValidationIssue>, String> {
     let trains = load_trains(container)?;
+    let rails = load_rails(container)?;
     let mut issues = Vec::new();
     let mut ids = BTreeSet::new();
     if !valid_id(&container.index.namespace) {
@@ -132,11 +134,11 @@ pub fn validate(
             Some("modelFormat"),
         );
     }
-    if trains.is_empty() {
+    if trains.is_empty() && rails.is_empty() {
         issue(
             &mut issues,
             "error",
-            "Create at least one train before exporting.",
+            "Create at least one train or rail before exporting.",
             None,
             None,
             None,
@@ -435,6 +437,7 @@ pub fn validate(
                         severity: "error".into(),
                         message,
                         train_id: Some(train.id.clone()),
+                        rail_id: None,
                         carriage_id: Some(carriage.id.clone()),
                         layer_id: Some(layer.id.clone()),
                         field: Some(field),
@@ -443,6 +446,7 @@ pub fn validate(
             }
         }
     }
+    validate_rails(container, &rails, options, &mut issues);
     Ok(issues)
 }
 
@@ -482,6 +486,7 @@ pub fn export(
             &mut files,
         )?;
     }
+    build_rails(container, options, &mut files)?;
     write_zip(path, &files)?;
     Ok(ExportReport {
         path: path.to_string_lossy().into_owned(),
@@ -731,6 +736,120 @@ fn build_mtr3(
         format!("assets/{namespace}/mtr_custom_resources.json"),
         pretty(&json!({"custom_trains":custom}))?,
     );
+    Ok(())
+}
+
+pub fn load_rails(container: &mut Container) -> Result<Vec<RailDefinition>, String> {
+    let entries: Vec<_> = container.index.content.iter().filter(|e| e.kind == "rail").cloned().collect();
+    entries.into_iter().map(|entry| {
+        let hash = entry.resources.first().ok_or_else(|| format!("Rail {} has no document.", entry.name))?;
+        serde_json::from_slice(&container.read_blob(hash)?).map_err(|e| format!("Invalid rail {}: {e}", entry.name))
+    }).collect()
+}
+
+fn validate_rails(container: &mut Container, rails: &[RailDefinition], options: &ExportOptions, issues: &mut Vec<ValidationIssue>) {
+    let mut ids = BTreeSet::new();
+    for rail in rails {
+        let mut report = |layer: Option<&ModelLayer>, field: &str, message: String| {
+            issues.push(ValidationIssue {severity: "error".into(), message, train_id: None, rail_id: Some(rail.id.clone()), carriage_id: None, layer_id: layer.map(|l| l.id.clone()), field: Some(field.into())});
+        };
+        if !valid_id(&rail.export_id) || !ids.insert(rail.export_id.clone()) {
+            report(None, "exportId", "Rail export IDs must be valid and unique.".into());
+        }
+        if !rail.repeat_interval.is_finite() || rail.repeat_interval <= 0.0 {
+            report(None, "repeatInterval", "Rail repeat interval must be finite and greater than zero.".into());
+        }
+        let mut geometry = false;
+        for layer in rail.models.iter().filter(|l| !options.only_visible || l.visible) {
+            let result = (|| -> Result<(), String> {
+                let (asset, mut doc) = load_asset(container, &layer.asset_id)?;
+                apply_layer_edits(&mut doc, layer, options.only_visible)?;
+                geometry |= !doc.parts.is_empty();
+                for part in &doc.parts {
+                    if part.positions.is_empty() || part.indices.is_empty() || part.indices.len() % 3 != 0
+                        || part.indices.iter().any(|i| *i as usize >= part.positions.len())
+                        || (!part.normals.is_empty() && part.normals.len() != part.positions.len())
+                        || (!part.texcoords.is_empty() && part.texcoords.len() != part.positions.len())
+                        || part.positions.iter().flatten().chain(part.normals.iter().flatten()).chain(part.texcoords.iter().flatten()).any(|v| !v.is_finite()) {
+                        return Err(format!("Part {} contains invalid mesh data.", part.name));
+                    }
+                    if part.material.is_some_and(|i| i >= doc.materials.len()) { return Err("Rail part references a missing material.".into()); }
+                }
+                for binding in &layer.material_bindings {
+                    if !doc.materials.iter().any(|m| m.id == binding.material_id) { return Err(format!("Unknown material binding: {}", binding.material_id)); }
+                }
+                for material in &doc.materials {
+                    if material.color.iter().any(|v| !v.is_finite()) { return Err("Rail material has an invalid color.".into()); }
+                    texture_bytes(container, &asset, Some(material), layer)?;
+                }
+                if !layer.part_rules.is_empty() { return Err("Train placement rules cannot be applied to rail models.".into()); }
+                Ok(())
+            })();
+            if let Err(error) = result { report(Some(layer), "models", error); }
+        }
+        if !geometry { report(None, "models", "Rail has no exportable geometry. Import a model or make a layer visible.".into()); }
+    }
+}
+
+fn build_rails(container: &mut Container, options: &ExportOptions, files: &mut BTreeMap<String, Vec<u8>>) -> Result<(), String> {
+    let rails = load_rails(container)?;
+    if rails.is_empty() { return Ok(()); }
+    let namespace = container.index.namespace.clone();
+    let mut entries = Vec::new();
+    let mut nte = serde_json::Map::new();
+    for rail in rails {
+        let base = format!("models/rail/{}", rail.export_id);
+        let mut combined = ModelDocument { parts: vec![], materials: vec![], warnings: vec![], uv_origin_top_left: false };
+        let mut textures = Vec::new();
+        for layer in rail.models.iter().filter(|l| !options.only_visible || l.visible) {
+            let (asset, mut doc) = load_asset(container, &layer.asset_id)?;
+            apply_layer_edits(&mut doc, layer, options.only_visible)?;
+            name_parts(&mut doc, &layer.id);
+            if doc.parts.iter().any(|p| p.material.is_none()) {
+                let index = doc.materials.len();
+                doc.materials.push(ModelMaterial { id: "__default".into(), name: "Default".into(), color: [1.0;4], texture: None, properties: Default::default() });
+                for part in &mut doc.parts { if part.material.is_none() { part.material = Some(index); } }
+            }
+            let offset = combined.materials.len();
+            for material in &doc.materials {
+                let bytes = texture_bytes(container, &asset, Some(material), layer)?;
+                let texture_name = format!("{}.png", blake3::hash(&bytes).to_hex());
+                files.insert(format!("assets/{namespace}/models/rail/{texture_name}"), bytes);
+                textures.push(texture_name);
+            }
+            let flip = doc.flip_v(layer.flip_texture_v);
+            for part in &mut doc.parts {
+                part.material = part.material.map(|i| i + offset);
+                if flip { for uv in &mut part.texcoords { uv[1] = 1.0 - uv[1]; } }
+            }
+            combined.parts.extend(doc.parts);
+            combined.materials.extend(doc.materials);
+        }
+        let format = if options.target == "mtr4" && options.model_format == "mqo" { "mqo" } else { "obj" };
+        let model = if format == "mqo" {
+            let mut mqo = write_mqo(&combined);
+            for texture in &textures { mqo = mqo.replacen("tex(\"default.png\")", &format!("tex(\"{texture}\")"), 1); }
+            mqo
+        } else {
+            files.insert(format!("assets/{namespace}/{base}.mtl"), write_mtl(&combined, &textures).into_bytes());
+            write_obj(&combined, &format!("{}.mtl", rail.export_id))
+        };
+        files.insert(format!("assets/{namespace}/{base}.{format}"), model.into_bytes());
+        if options.target == "mtr4" {
+            entries.push(json!({"id":format!("{namespace}:{}",rail.export_id),"name":rail.name,"color":"777777","modelResource":format!("{namespace}:{base}.{format}"),"textureResource":format!("{namespace}:models/rail/{}",textures[0]),"flipTextureV":false,"repeatInterval":rail.repeat_interval,"modelYOffset":0}));
+        } else {
+            nte.insert(format!("{namespace}:{}",rail.export_id),json!({"name":rail.name,"model":format!("{namespace}:{base}.obj"),"repeatInterval":rail.repeat_interval,"yOffset":0,"flipV":false}));
+        }
+    }
+    if options.target == "mtr4" {
+        let path = format!("assets/{namespace}/mtr_custom_resources.json");
+        let mut resources: Value = serde_json::from_slice(files.get(&path).ok_or("Missing resource manifest")?).map_err(|e|e.to_string())?;
+        resources["rails"] = Value::Array(entries);
+        files.insert(path, pretty(&resources)?);
+    } else {
+        // NTE scans this namespace specifically, regardless of model namespace.
+        files.insert(format!("assets/mtrsteamloco/rails/{namespace}.json"), pretty(&Value::Object(nte))?);
+    }
     Ok(())
 }
 
@@ -1138,6 +1257,7 @@ fn issue(
         severity: severity.into(),
         message: message.into(),
         train_id: train_id.map(Into::into),
+        rail_id: None,
         carriage_id: carriage_id.map(Into::into),
         layer_id: None,
         field: field.map(Into::into),
@@ -1209,6 +1329,92 @@ mod tests {
             warnings: vec![],
             uv_origin_top_left: false,
         }
+    }
+    fn rail_fixture(fixture: &mut Fixture) -> RailDefinition {
+        let mut rail = RailDefinition::new("Test rail", "test_rail");
+        rail.models = fixture.train.carriages[0].body_models.clone();
+        rail.models[0].part_rules.clear();
+        save_rail(fixture, &rail);
+        rail
+    }
+    fn save_rail(fixture: &mut Fixture, rail: &RailDefinition) {
+        let hash = fixture.container.put_blob(&serde_json::to_vec(rail).unwrap(), "application/json").unwrap();
+        fixture.container.index.content = vec![ContentEntry { id: rail.id.clone(), kind: "rail".into(), name: rail.name.clone(), file: "rail.json".into(), updated_at: 0, resources: vec![hash] }];
+        fixture.container.commit().unwrap();
+    }
+    #[test]
+    fn rails_export_alone_in_both_targets_with_multiple_textures() {
+        let mut fixture = Fixture::new();
+        let rail = rail_fixture(&mut fixture);
+        for opt in [options("mtr4", "obj"), options("mtr4", "mqo"), options("mtr3_nte", "obj")] {
+            let output = fixture.root.join("rail.zip");
+            assert!(validate(&mut fixture.container, &opt).unwrap().is_empty());
+            export(&mut fixture.container, &output, &opt).unwrap();
+            let bytes = fs::read(&output).unwrap();
+            export(&mut fixture.container, &output, &opt).unwrap();
+            assert_eq!(bytes, fs::read(&output).unwrap());
+            let files = unzip(&output);
+            let ns = &fixture.container.index.namespace;
+            assert_eq!(files.keys().filter(|p|p.contains("models/rail/") && p.ends_with(".png")).count(), 2);
+            let model = std::str::from_utf8(&files[&format!("assets/{ns}/models/rail/test_rail.{}", opt.model_format)]).unwrap();
+            assert!(!model.contains("default.png"));
+            if opt.target == "mtr4" {
+                let manifest: Value = serde_json::from_slice(&files[&format!("assets/{ns}/mtr_custom_resources.json")]).unwrap();
+                check_schema(&manifest["rails"][0], "railResource.json");
+                assert_eq!(manifest["rails"][0]["name"], rail.name);
+                assert_eq!(manifest["rails"][0]["repeatInterval"], json!(rail.repeat_interval));
+                assert_eq!(manifest["rails"][0]["flipTextureV"], false);
+                assert_eq!(manifest["vehicles"], json!([]));
+            } else {
+                let manifest: Value = serde_json::from_slice(&files[&format!("assets/mtrsteamloco/rails/{ns}.json")]).unwrap();
+                assert_eq!(manifest[format!("{ns}:test_rail")]["model"], format!("{ns}:models/rail/test_rail.obj"));
+            }
+        }
+        fixture.finish();
+    }
+    #[test]
+    fn rail_only_visible_omits_hidden_parts_and_layers() {
+        let mut fixture = Fixture::new();
+        let mut rail = rail_fixture(&mut fixture);
+        rail.models[0].hidden_parts.push("p2".into());
+        let mut hidden = rail.models[0].clone();
+        hidden.id = "hidden".into();
+        hidden.visible = false;
+        hidden.asset_id = "missing-hidden".into();
+        rail.models.push(hidden);
+        save_rail(&mut fixture, &rail);
+        for opt in [options("mtr4", "obj"), options("mtr3_nte", "obj")] {
+            let opt = ExportOptions { only_visible: true, ..opt };
+            let output = fixture.root.join("rail-visible.zip");
+            export(&mut fixture.container, &output, &opt).unwrap();
+            let files = unzip(&output);
+            let model = std::str::from_utf8(&files[&format!("assets/{}/models/rail/test_rail.obj",fixture.container.index.namespace)]).unwrap();
+            assert_eq!(model.lines().filter(|l|l.starts_with("f ")).count(), 1);
+        }
+        rail.export_id = "../escape".into();
+        save_rail(&mut fixture, &rail);
+        assert!(validate(&mut fixture.container, &options("mtr4", "obj")).unwrap().iter().any(|i| i.field.as_deref() == Some("exportId")));
+        fixture.finish();
+    }
+    #[test]
+    fn rail_validation_reports_context_and_visibility() {
+        let mut fixture = Fixture::new();
+        let mut rail = rail_fixture(&mut fixture);
+        rail.repeat_interval = 0.0;
+        save_rail(&mut fixture, &rail);
+        let issues = validate(&mut fixture.container, &options("mtr4", "obj")).unwrap();
+        assert!(issues.iter().any(|i| i.rail_id.as_deref() == Some(&rail.id) && i.field.as_deref() == Some("repeatInterval")));
+        rail.repeat_interval = 0.6;
+        rail.models[0].visible = false;
+        save_rail(&mut fixture, &rail);
+        assert!(validate(&mut fixture.container, &options("mtr4", "obj")).unwrap().is_empty());
+        let opt = ExportOptions { only_visible: true, ..options("mtr4", "obj") };
+        assert!(!validate(&mut fixture.container, &opt).unwrap().is_empty());
+        rail.models[0].visible = true;
+        rail.models[0].asset_id = "missing".into();
+        save_rail(&mut fixture, &rail);
+        assert!(validate(&mut fixture.container, &opt).unwrap().iter().any(|i|i.layer_id.as_deref() == Some(&rail.models[0].id)));
+        fixture.finish();
     }
     #[test]
     fn render_stages_export_per_part_with_target_names() {
