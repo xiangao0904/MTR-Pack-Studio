@@ -67,6 +67,8 @@ pub struct ProjectIndex {
     #[serde(default)]
     pub texture_names: BTreeMap<String, String>,
     #[serde(default)]
+    pub texture_dimensions: BTreeMap<String, [u32; 2]>,
+    #[serde(default)]
     pub asset_thumbnail_hashes: BTreeMap<String, String>,
     pub blobs: BTreeMap<String, BlobLocation>,
 }
@@ -131,6 +133,7 @@ impl Container {
             content: Vec::new(),
             assets: BTreeMap::new(),
             texture_names: BTreeMap::new(),
+            texture_dimensions: BTreeMap::new(),
             asset_thumbnail_hashes: BTreeMap::new(),
             blobs: BTreeMap::new(),
         };

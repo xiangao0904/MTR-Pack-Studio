@@ -20,7 +20,6 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
-use image::GenericImageView;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -566,13 +565,19 @@ fn import_model_asset_into(container: &mut Container, path: &Path, dependency_ov
         let name = referenced.file_name().and_then(|value| value.to_str()).unwrap_or("dependency").to_string();
         let resolved = if referenced.exists() { referenced } else { dependency_overrides.get(&name).map(PathBuf::from).ok_or_else(|| format!("Locate the missing model dependency: {name}"))? };
         let bytes = fs::read(&resolved).map_err(|e| format!("Unable to read {name}: {e}"))?; let hash = container.put_blob(&bytes, media_type(&resolved))?;
-        if media_type(&resolved).starts_with("image/") { container.index.texture_names.entry(hash.clone()).or_insert_with(|| name.clone()); }
+        if media_type(&resolved).starts_with("image/") {
+            remember_texture_dimensions(container, &hash, &bytes)?;
+            container.index.texture_names.entry(hash.clone()).or_insert_with(|| name.clone());
+        }
         dependencies.push(AssetDependency { name, hash, media_type: media_type(&resolved).into() });
     }
     for (name, bytes) in embedded_dependencies {
         if dependencies.iter().any(|dependency| dependency.name.eq_ignore_ascii_case(&name)) { continue; }
         let hash = container.put_blob(&bytes, media_type(Path::new(&name)))?;
-        if media_type(Path::new(&name)).starts_with("image/") { container.index.texture_names.entry(hash.clone()).or_insert_with(|| name.clone()); }
+        if media_type(Path::new(&name)).starts_with("image/") {
+            remember_texture_dimensions(container, &hash, &bytes)?;
+            container.index.texture_names.entry(hash.clone()).or_insert_with(|| name.clone());
+        }
         dependencies.push(AssetDependency { name: name.clone(), hash, media_type: media_type(Path::new(&name)).into() });
     }
     for hash in container.index.assets.values().cloned().collect::<Vec<_>>() {
@@ -626,6 +631,20 @@ struct TextureCatalogItem { hash: String, name: String, width: u32, height: u32,
 #[serde(rename_all = "camelCase")]
 struct AssetCatalog { models: Vec<ModelCatalogItem>, textures: Vec<TextureCatalogItem> }
 
+fn image_dimensions(bytes: &[u8]) -> Result<[u32; 2], String> {
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format().map_err(|e| e.to_string())?;
+    let (width, height) = reader.into_dimensions().map_err(|e| e.to_string())?;
+    Ok([width, height])
+}
+
+fn remember_texture_dimensions(container: &mut Container, hash: &str, bytes: &[u8]) -> Result<(), String> {
+    if !container.index.texture_dimensions.contains_key(hash) {
+        container.index.texture_dimensions.insert(hash.to_string(), image_dimensions(bytes)?);
+    }
+    Ok(())
+}
+
 fn asset_catalog(container: &mut Container) -> Result<AssetCatalog, String> {
     let mut model_refs: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     let mut texture_refs: std::collections::BTreeMap<String, Vec<String>> = Default::default();
@@ -668,9 +687,14 @@ fn asset_catalog(container: &mut Container) -> Result<AssetCatalog, String> {
     for hash in texture_refs.keys() { names.entry(hash.clone()).or_insert_with(|| "Imported texture".into()); }
     let mut textures = Vec::new();
     for (hash, name) in names {
-        let bytes = container.read_blob(&hash)?;
-        let dimensions = image::load_from_memory(&bytes).map_err(|e| format!("Unable to read texture {name}: {e}"))?.dimensions();
-        textures.push(TextureCatalogItem { hash: hash.clone(), name, width: dimensions.0, height: dimensions.1, references: texture_refs.remove(&hash).unwrap_or_default() });
+        let dimensions = if let Some(dimensions) = container.index.texture_dimensions.get(&hash) { *dimensions }
+        else {
+            let bytes = container.read_blob(&hash)?;
+            let dimensions = image_dimensions(&bytes).map_err(|e| format!("Unable to read texture {name}: {e}"))?;
+            container.index.texture_dimensions.insert(hash.clone(), dimensions);
+            dimensions
+        };
+        textures.push(TextureCatalogItem { hash: hash.clone(), name, width: dimensions[0], height: dimensions[1], references: texture_refs.remove(&hash).unwrap_or_default() });
     }
     models.sort_by(|a,b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     textures.sort_by(|a,b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -856,9 +880,14 @@ fn store_image_bytes(state: State<AppState>, bytes: Vec<u8>) -> Result<String, S
     let bytes = normalize_png(&bytes)?;
     let mut active = state.active.lock().map_err(|_| lock_error())?; let session = active.as_mut().ok_or("No project is open.")?;
     let previous = session.container.index.clone();
-    let hash = session.container.put_blob(&bytes, "image/png")?;
-    if let Err(error) = session.container.commit() { session.container.index = previous; return Err(error); }
-    Ok(hash)
+    let result = (|| {
+        let hash = session.container.put_blob(&bytes, "image/png")?;
+        remember_texture_dimensions(&mut session.container, &hash, &bytes)?;
+        session.container.commit()?;
+        Ok(hash)
+    })();
+    if result.is_err() { session.container.index = previous; }
+    result
 }
 #[tauri::command(async)]
 fn import_texture_file(state: State<AppState>, path: String) -> Result<String, String> {
@@ -870,6 +899,7 @@ fn import_texture_file(state: State<AppState>, path: String) -> Result<String, S
     let previous = session.container.index.clone();
     let result = (|| {
         let hash = session.container.put_blob(&bytes, "image/png")?;
+        remember_texture_dimensions(&mut session.container, &hash, &bytes)?;
         session.container.index.texture_names.entry(hash.clone()).or_insert(name);
         session.container.commit()?;
         Ok(hash)
