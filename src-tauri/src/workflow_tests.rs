@@ -7,6 +7,23 @@ fn glb_json(bytes: &[u8]) -> serde_json::Value {
 }
 
 #[test]
+fn preview_cache_reuses_recent_entries_and_stays_bounded() {
+    let mut cache = PreviewCache::default();
+    cache.insert("first".into(), vec![1]);
+    cache.insert("second".into(), vec![2]);
+    assert_eq!(cache.get("first"), Some(vec![1]));
+    for index in 0..PREVIEW_CACHE_MAX_ENTRIES - 1 {
+        cache.insert(format!("new-{index}"), vec![3]);
+    }
+    assert_eq!(cache.get("second"), None);
+    assert_eq!(cache.get("first"), Some(vec![1]));
+    assert_eq!(cache.entries.len(), PREVIEW_CACHE_MAX_ENTRIES);
+    cache.insert("large".into(), vec![0; PREVIEW_CACHE_MAX_BYTES + 1]);
+    assert_eq!(cache.get("large"), None);
+    assert!(cache.bytes <= PREVIEW_CACHE_MAX_BYTES);
+}
+
+#[test]
 fn valid_png_bytes_are_reused_without_reencoding() {
     let mut output=std::io::Cursor::new(Vec::new());
     image::RgbaImage::from_pixel(2,2,image::Rgba([12,34,56,78])).write_to(&mut output,image::ImageFormat::Png).unwrap();

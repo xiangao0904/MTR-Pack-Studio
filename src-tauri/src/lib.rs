@@ -43,6 +43,35 @@ struct ProjectData {
 
 struct ProjectSession {
     container: Container,
+    preview_cache: PreviewCache,
+}
+
+const PREVIEW_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const PREVIEW_CACHE_MAX_ENTRIES: usize = 16;
+
+#[derive(Default)]
+struct PreviewCache {
+    entries: VecDeque<(String, Vec<u8>)>,
+    bytes: usize,
+}
+
+impl PreviewCache {
+    fn get(&mut self, key: &str) -> Option<Vec<u8>> {
+        let index = self.entries.iter().position(|(cached, _)| cached == key)?;
+        let entry = self.entries.remove(index)?;
+        let result = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(result)
+    }
+
+    fn insert(&mut self, key: String, value: Vec<u8>) {
+        if value.len() > PREVIEW_CACHE_MAX_BYTES { return; }
+        self.bytes += value.len();
+        self.entries.push_back((key, value));
+        while self.bytes > PREVIEW_CACHE_MAX_BYTES || self.entries.len() > PREVIEW_CACHE_MAX_ENTRIES {
+            if let Some((_, evicted)) = self.entries.pop_front() { self.bytes -= evicted.len(); }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -224,7 +253,7 @@ fn replace_active(state: &AppState, next: Container) -> Result<ProjectData, Stri
         current.container.flush()?;
     }
     let data = project_data(&next);
-    *active = Some(ProjectSession { container: next });
+    *active = Some(ProjectSession { container: next, preview_cache: PreviewCache::default() });
     Ok(data)
 }
 
@@ -805,7 +834,13 @@ fn get_model_preview(state: State<AppState>, asset_id: String, material_bindings
     let bytes = if bindings.is_empty() && !asset.preview_hash.is_empty() {
         session.container.read_blob(&asset.preview_hash)?
     } else {
-        asset_preview(&mut session.container, &asset, &bindings)?
+        let key = format!("{}:{}:{}", asset.id, asset.document_hash, blake3::hash(&rmp_serde::to_vec_named(&bindings).map_err(|e| e.to_string())?).to_hex());
+        if let Some(cached) = session.preview_cache.get(&key) { cached }
+        else {
+            let generated = asset_preview(&mut session.container, &asset, &bindings)?;
+            session.preview_cache.insert(key, generated.clone());
+            generated
+        }
     };
     Ok(tauri::ipc::Response::new(bytes))
 }
