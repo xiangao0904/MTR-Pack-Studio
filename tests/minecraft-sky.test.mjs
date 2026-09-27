@@ -10,13 +10,16 @@ test('legacy and malformed sky preferences remain finite and bounded',()=>{
   assert.equal(normalizeViewportSettings('minecraft',{skyHaze:100}).skyHaze,1)
 })
 
-test('low sun warms direct light and horizon while keeping a blue upper sky',()=>{
+test('24-hour sky moves through daylight, sunset, and dark night',()=>{
   const settings=defaultViewportSettings('minecraft')
-  const day=minecraftAtmosphere({...settings,lightElevation:60}),sunset=minecraftAtmosphere({...settings,lightElevation:10})
+  const day=minecraftAtmosphere({...settings,timeOfDay:12}),sunset=minecraftAtmosphere({...settings,timeOfDay:18}),night=minecraftAtmosphere({...settings,timeOfDay:0})
   assert.ok(sunset.sun.r/sunset.sun.b>day.sun.r/day.sun.b)
   assert.ok(sunset.horizon.r/sunset.horizon.b>day.horizon.r/day.horizon.b)
   assert.ok(sunset.zenith.b>sunset.zenith.r)
-  for(const palette of [day,sunset])for(const color of [palette.sun,palette.horizon,palette.zenith])assert.ok(color.toArray().every(Number.isFinite))
+  assert.ok(night.zenith.r<day.zenith.r*.2)
+  assert.ok(night.environmentFactor<day.environmentFactor*.2)
+  assert.ok(night.directFactor<day.directFactor*.1)
+  for(const palette of [day,sunset,night])for(const color of [palette.sun,palette.horizon,palette.zenith])assert.ok(color.toArray().every(Number.isFinite))
 })
 
 test('sky defaults preserve existing indirect illumination and shadow quality',()=>{

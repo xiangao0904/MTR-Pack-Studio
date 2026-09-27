@@ -8,10 +8,11 @@ import { PreviewRenderer, filterModelTextures, prepareMaterialTextures } from '.
 import { PreviewEnvironment, type PreviewLightingMood } from '../lib/preview-environment'
 import type { PreviewRenderMode, ViewportSettings } from '../lib/viewport-settings'
 import { PreviewEnvironmentMap } from '../lib/preview-environment-map'
+import { minecraftAtmosphere } from '../lib/minecraft-sky'
 import { defaultViewportSettings, normalizeViewportSettings } from '../lib/viewport-settings'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { getModelPreview, getModelAsset, type RailDefinition, type MaterialBinding, type RenderStage } from '../lib/projects'
+import { getModelPreview, getModelAsset, type RailDefinition, type MaterialBinding, type MaterialProperties, type RenderStage } from '../lib/projects'
 import { t } from '../i18n'
 import { ThumbnailRefreshTracker } from '../lib/thumbnail-refresh'
 
@@ -74,6 +75,54 @@ const contentCache = new Map<string, THREE.Group>()
 const ownedGeometries = new WeakSet<THREE.BufferGeometry>()
 let thumbnailTimer: number | undefined
 
+function textureBindings(bindings: MaterialBinding[]): MaterialBinding[] {
+  return bindings.map(binding => ({materialId:binding.materialId,textureAssetId:binding.textureAssetId,properties:binding.properties?.maps?{maps:binding.properties.maps}:undefined}))
+}
+function contentSignature() {
+  return JSON.stringify([props.assets.map(asset=>({...asset,bindings:textureBindings(asset.bindings)})),props.vehicleLightsOn])
+}
+function scalarSignature() {
+  return JSON.stringify(props.assets.map(asset=>[asset.key,asset.bindings.map(binding=>[binding.materialId,{
+    metalness:binding.properties?.metalness,roughness:binding.properties?.roughness,emissive:binding.properties?.emissive,
+    opacity:binding.properties?.opacity,alphaMode:binding.properties?.alphaMode,alphaCutoff:binding.properties?.alphaCutoff,
+    normalScale:binding.properties?.normalScale,doubleSided:binding.properties?.doubleSided,
+  }])]))
+}
+type MaterialBase = {metalness:number;roughness:number;emissive:[number,number,number];opacity:number;transparent:boolean;stageTransparent:boolean;alphaTest:number;depthWrite:boolean;side:THREE.Side;normalScale:[number,number]}
+function rememberMaterialBase(material:THREE.MeshStandardMaterial,stage:RenderStage) {
+  material.userData.previewBase={metalness:material.metalness,roughness:material.roughness,emissive:[material.emissive.r,material.emissive.g,material.emissive.b],opacity:material.opacity,transparent:material.transparent,stageTransparent:stage==='INTERIOR_TRANSLUCENT'||stage==='ALWAYS_ON_LIGHT',alphaTest:material.alphaTest,depthWrite:material.depthWrite,side:material.side,normalScale:[material.normalScale.x,material.normalScale.y]} satisfies MaterialBase
+}
+function applyMaterialOverrides() {
+  const layers=new Map(props.assets.map(asset=>[asset.key,asset]))
+  content?.traverse(object=>{
+    if(!(object instanceof THREE.Mesh))return
+    const asset=layers.get(object.userData.instanceKey)
+    if(!asset)return
+    for(const material of Array.isArray(object.material)?object.material:[object.material]){
+      if(!(material instanceof THREE.MeshStandardMaterial))continue
+      const base=material.userData.previewBase as MaterialBase|undefined
+      if(!base)continue
+      const properties:MaterialProperties|undefined=asset.bindings.find(binding=>binding.materialId===material.userData.materialId)?.properties
+      material.metalness=properties?.metalness??base.metalness
+      material.roughness=properties?.roughness??base.roughness
+      material.opacity=properties?.opacity??base.opacity
+      const emission=properties?.emissive??base.emissive
+      material.emissive.setRGB(emission[0],emission[1],emission[2])
+      const normalScale=properties?.normalScale
+      material.normalScale.set(normalScale??base.normalScale[0],normalScale??base.normalScale[1])
+      const mode=properties?.alphaMode
+      const transparent=base.stageTransparent||(mode==='BLEND')||(!mode&&(base.transparent||material.opacity<1))
+      const alphaTest=mode==='MASK'||(!mode&&base.alphaTest>0)?(properties?.alphaCutoff??(base.alphaTest||0.1)):mode==='OPAQUE'||mode==='BLEND'?0:base.alphaTest
+      const side=properties?.doubleSided==null?base.side:properties.doubleSided?THREE.DoubleSide:THREE.FrontSide
+      if(material.transparent!==transparent||material.alphaTest!==alphaTest||material.side!==side)material.needsUpdate=true
+      material.transparent=transparent;material.alphaTest=alphaTest;material.side=side
+      material.depthWrite=transparent?false:base.depthWrite
+      wireframeBase.set(material,{opacity:material.opacity,transparent:material.transparent,depthWrite:material.depthWrite})
+    }
+  })
+  applyWireframeMaterials()
+}
+
 function disposeCachedContent(root: THREE.Object3D) {
   const materials = new Set<THREE.Material>()
   const geometries = new Set<THREE.BufferGeometry>()
@@ -106,14 +155,15 @@ function disposeObject(root: THREE.Object3D) {
 async function rebuild() {
   if (!scene) return
   const version = ++generation
-  const signature = JSON.stringify([props.assets,props.vehicleLightsOn])
+  const signature = contentSignature()
   const cached = contentCache.get(signature)
   const group = cached ?? new THREE.Group()
   let complete = true
   if (!cached) try {
     const results = await Promise.allSettled(props.assets.map(async asset => {
-      const cacheKey = JSON.stringify([asset.assetId, asset.bindings])
-      if (!byteCache.has(cacheKey)) byteCache.set(cacheKey, getModelPreview(asset.assetId, asset.bindings).catch(error => { byteCache.delete(cacheKey); throw error }))
+      const previewBindings=textureBindings(asset.bindings)
+      const cacheKey = JSON.stringify([asset.assetId, previewBindings])
+      if (!byteCache.has(cacheKey)) byteCache.set(cacheKey, getModelPreview(asset.assetId, previewBindings).catch(error => { byteCache.delete(cacheKey); throw error }))
       if (!parsedCache.has(cacheKey)) parsedCache.set(cacheKey, (async () => {
         const gltf = await new GLTFLoader().parseAsync(await byteCache.get(cacheKey)!, '')
         prepareMaterialTextures(gltf.scene)
@@ -154,6 +204,7 @@ async function rebuild() {
                 material.emissiveMap ||= material.map
                 material.emissiveIntensity = stage === 'LIGHT' || stage === 'ALWAYS_ON_LIGHT' ? 1 : .4
               }
+              rememberMaterialBase(material,stage)
             }
             return material
           }
@@ -182,7 +233,7 @@ async function rebuild() {
   environment?.replaceObjects(previous,content,previewRoot,retainPrevious)
   if (previous && previous !== content && !retainPrevious) disposeCachedContent(previous)
   if (cached) { contentCache.delete(signature); contentCache.set(signature,cached) }
-  applyWireframeMaterials()
+  applyMaterialOverrides()
   if(renderer)filterModelTextures(content,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   if(renderer) renderer.shadowMap.needsUpdate=true
   updateSelection()
@@ -374,7 +425,7 @@ function queueThumbnail() {
   if (!carriageId || !signature || signature === props.thumbnailSavedSignature || requestedThumbnails.get(carriageId) === signature || !props.assets.length) return
   thumbnailTimer = window.setTimeout(() => {
     thumbnailTimer = undefined
-    if (disposed || carriageId !== props.thumbnailCarriageId || signature !== props.thumbnailModelSignature || activeContentSignature !== JSON.stringify([props.assets,props.vehicleLightsOn])) return
+    if (disposed || carriageId !== props.thumbnailCarriageId || signature !== props.thumbnailModelSignature || activeContentSignature !== contentSignature()) return
     requestedThumbnails.set(carriageId,signature)
     try { captureThumbnail(carriageId,signature) }
     catch(cause) { requestedThumbnails.delete(carriageId);emit('error',cause instanceof Error?cause.message:String(cause)) }
@@ -384,7 +435,7 @@ function observeThumbnail() {
   if (thumbnailTimer !== undefined) window.clearTimeout(thumbnailTimer)
   thumbnailTimer = undefined
   if (!thumbnailRefresh.shouldRefresh(props.thumbnailCarriageId,props.thumbnailModelSignature,props.thumbnailSavedSignature)) return
-  if (activeContentSignature !== JSON.stringify([props.assets,props.vehicleLightsOn])) return
+  if (activeContentSignature !== contentSignature()) return
   queueThumbnail()
 }
 function updateEnvironment() {
@@ -395,8 +446,8 @@ function updateEnvironment() {
   activeSettings=settings
   if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings), environmentMap.background)
   environment?.apply(previewRoot, props.renderMode, settings, props.groundHeight)
-  applyWireframeMaterials()
-  pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity)
+  applyMaterialOverrides()
+  pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).daylight:1))
   if(renderer)filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe)
   if (renderer) { renderer.shadowMap.enabled = true; renderer.shadowMap.needsUpdate = true }
@@ -410,8 +461,8 @@ function updateViewportSettings() {
   activeSettings=settings
   if(previous?.pixelTextures!==settings.pixelTextures)filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),settings.pixelTextures)
   pipeline?.setAO(settings.ambientOcclusion && !props.wireframe)
-  pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity)
-  if(!previous || previous.lightAzimuth!==settings.lightAzimuth || previous.lightElevation!==settings.lightElevation || previous.lightSize!==settings.lightSize || previous.shadowQuality!==settings.shadowQuality)renderer.shadowMap.needsUpdate=true
+  pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).daylight:1))
+  if(!previous || previous.lightAzimuth!==settings.lightAzimuth || previous.lightElevation!==settings.lightElevation || previous.timeOfDay!==settings.timeOfDay || previous.lightSize!==settings.lightSize || previous.shadowQuality!==settings.shadowQuality)renderer.shadowMap.needsUpdate=true
   if(environmentMap.needsUpdate(props.renderMode,settings)) {
     if(skyTimer!==undefined)clearTimeout(skyTimer)
     skyTimer=window.setTimeout(()=>{
@@ -480,7 +531,7 @@ function updateAdaptiveWireframe() {
     }
   })
 }
-function updateWireframe() { pipeline?.setIndirect(props.wireframe ? 0 : normalizeViewportSettings(props.renderMode, props.settings).indirectIntensity); pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;applyWireframeMaterials() }
+function updateWireframe() { const settings=normalizeViewportSettings(props.renderMode,props.settings);pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).daylight:1));pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;applyWireframeMaterials() }
 function updateSelection() {
   if (!scene) return
   selectedObject = undefined
@@ -540,7 +591,8 @@ onMounted(()=>{
   resize=new ResizeObserver(()=>{if(!host.value||!renderer||!camera)return;const{clientWidth,clientHeight}=host.value;renderer.setSize(clientWidth,clientHeight,false);pipeline?.setSize(clientWidth,clientHeight,renderer.getPixelRatio());updateProjection()});resize.observe(host.value)
   const animate=(now:number)=>{frame=requestAnimationFrame(animate);advanceCameraTween(now);if(lightingTween&&environment){const tween=lightingTween,progress=Math.min(1,(now-tween.start)/260);environment.blendLighting(tween.from,tween.to,1-Math.pow(1-progress,3));if(progress===1)lightingTween=undefined}controls?.update();updateOrientation();updateSelectionBounds();updateAdaptiveWireframe();if(scene&&camera)pipeline?.render()};frame=requestAnimationFrame(animate);rebuildGuides();void rebuild();void rebuildRails()
 })
-watch(()=>JSON.stringify([props.assets,props.vehicleLightsOn]),()=>void rebuild())
+watch(contentSignature,()=>void rebuild())
+watch(scalarSignature,()=>{applyMaterialOverrides();observeThumbnail()})
 watch(()=>[props.thumbnailCarriageId,props.thumbnailModelSignature,props.thumbnailSavedSignature],observeThumbnail)
 watch(()=>JSON.stringify(props.guides),()=>{rebuildGuides();void rebuildRails()})
 watch(()=>[props.showRails,JSON.stringify(props.previewRail),props.builtInRailId],()=>void rebuildRails())

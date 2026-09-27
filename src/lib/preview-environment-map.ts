@@ -6,6 +6,11 @@ export function previewLightDirection(settings: Pick<ViewportSettings, 'lightAzi
   const a = THREE.MathUtils.degToRad(settings.lightAzimuth), e = THREE.MathUtils.degToRad(settings.lightElevation)
   return new THREE.Vector3(Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e))
 }
+export function minecraftSunDirection(settings: Pick<ViewportSettings,'timeOfDay'>) {
+  const phase=(settings.timeOfDay-6)*Math.PI/12
+  const elevation=Math.sin(phase)*THREE.MathUtils.degToRad(65)
+  return new THREE.Vector3(Math.cos(phase)*Math.cos(elevation),Math.sin(elevation),Math.sin(phase)*Math.cos(elevation))
+}
 
 /** Neutral studio reflectors. Minecraft uses the GPU-baked atmosphere below. */
 export function createEnvironmentTexture(_mode: Exclude<PreviewRenderMode, 'minecraft'>, settings: ViewportSettings) {
@@ -39,12 +44,12 @@ export class PreviewEnvironmentMap {
   constructor(renderer: THREE.WebGLRenderer) { this.renderer = renderer; this.generator = new THREE.PMREMGenerator(renderer) }
   needsUpdate(mode: PreviewRenderMode, settings: ViewportSettings) { return this.signature !== this.key(mode,settings) }
   private key(mode: PreviewRenderMode, settings: ViewportSettings) {
-    return `${mode}-${settings.lightAzimuth}-${settings.lightElevation}` + (mode === 'minecraft' ? `-${settings.cloudCover}-${settings.skyHaze}-${settings.lightSize}` : '')
+    return mode === 'minecraft' ? `${mode}-${settings.timeOfDay}-${settings.cloudCover}-${settings.skyHaze}-${settings.lightSize}` : `${mode}-${settings.lightAzimuth}-${settings.lightElevation}`
   }
   update(mode: PreviewRenderMode, settings: ViewportSettings) {
     const signature = this.key(mode,settings)
     if (signature !== this.signature) {
-      const source = mode === 'minecraft' ? this.sky.bake(this.renderer, settings, previewLightDirection(settings)) : createEnvironmentTexture(mode, settings)
+      const source = mode === 'minecraft' ? this.sky.bake(this.renderer, settings, minecraftSunDirection(settings)) : createEnvironmentTexture(mode, settings)
       const next = this.generator.fromEquirectangular(source)
       if (mode === 'minecraft') this.skyCube.fromEquirectangularTexture(this.renderer, source)
       this.backgroundTexture = mode === 'minecraft' ? this.skyCube.texture : undefined

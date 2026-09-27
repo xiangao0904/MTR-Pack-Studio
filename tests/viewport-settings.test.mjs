@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { defaultViewportSettings, normalizeViewportSettings } from '../src/lib/viewport-settings.ts'
+import { defaultViewportSettings, formatTimeOfDay, normalizeViewportSettings } from '../src/lib/viewport-settings.ts'
 
 test('damaged viewport preferences restore safe defaults and clamp light controls', () => {
   const defaults = defaultViewportSettings('material')
@@ -18,4 +18,12 @@ test('mode defaults do not share mutable state', () => {
   minecraft.lightIntensity=8
   assert.equal(studio.lightIntensity,3)
   assert.equal(defaultViewportSettings('minecraft').lightIntensity,3)
+})
+
+test('time of day covers midnight through the full day',()=>{
+  assert.equal(normalizeViewportSettings('minecraft',{timeOfDay:-2}).timeOfDay,0)
+  assert.equal(normalizeViewportSettings('minecraft',{timeOfDay:30}).timeOfDay,24)
+  assert.equal(formatTimeOfDay(0),'00:00')
+  assert.equal(formatTimeOfDay(18.25),'18:15')
+  assert.equal(formatTimeOfDay(24),'00:00')
 })

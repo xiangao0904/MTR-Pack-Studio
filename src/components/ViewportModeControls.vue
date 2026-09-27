@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
 import { Settings2 } from '@lucide/vue'
 import { t } from '../i18n'
-import { defaultViewportSettings, renderModes, type PreviewRenderMode, type ViewportSettings } from '../lib/viewport-settings'
+import { defaultViewportSettings, formatTimeOfDay, renderModes, type PreviewRenderMode, type ViewportSettings } from '../lib/viewport-settings'
 
 const props = defineProps<{ mode: PreviewRenderMode; settings: ViewportSettings; showGrid: boolean; wireframe: boolean }>()
 const emit = defineEmits<{
@@ -23,7 +23,7 @@ const hint = (mode: PreviewRenderMode) => mode === 'studio' ? t('studioModeHint'
 function update<K extends keyof ViewportSettings>(key: K, value: ViewportSettings[K]) {
   emit('update:settings', { ...props.settings, [key]: value })
 }
-function slider(event: Event, key: 'lightAzimuth' | 'lightElevation' | 'lightIntensity' | 'environmentIntensity' | 'lightSize' | 'indirectIntensity' | 'cloudCover' | 'skyHaze') {
+function slider(event: Event, key: 'lightAzimuth' | 'lightElevation' | 'timeOfDay' | 'lightIntensity' | 'environmentIntensity' | 'lightSize' | 'indirectIntensity' | 'cloudCover' | 'skyHaze') {
   update(key, Number((event.target as HTMLInputElement).value))
 }
 function reset() {
@@ -124,8 +124,9 @@ onBeforeUnmount(() => {
     <Teleport to="body">
     <Transition name="viewport-popover"><section v-if="open" :id="`${id}-settings`" ref="panel" class="settings-panel" :style="panelPosition" role="dialog" :aria-label="t('viewportSettings')" @focusout="focusOut">
       <header>{{ label(mode) }}<span>{{ t('viewportSettings') }}</span></header>
-        <label class="slider-row"><span>{{ t('lightAzimuth') }}<output>{{ settings.lightAzimuth }}°</output></span><input type="range" min="0" max="360" step="1" :aria-label="t('lightAzimuth')" :value="settings.lightAzimuth" @input="slider($event, 'lightAzimuth')"></label>
-        <label class="slider-row"><span>{{ t('lightElevation') }}<output>{{ settings.lightElevation }}°</output></span><input type="range" min="10" max="85" step="1" :aria-label="t('lightElevation')" :value="settings.lightElevation" @input="slider($event, 'lightElevation')"></label>
+        <label v-if="mode==='minecraft'" class="slider-row"><span>{{ t('timeOfDay') }}<output>{{ formatTimeOfDay(settings.timeOfDay) }}</output></span><input type="range" min="0" max="24" step="0.25" :aria-label="t('timeOfDay')" :value="settings.timeOfDay" @input="slider($event, 'timeOfDay')"></label>
+        <template v-else><label class="slider-row"><span>{{ t('lightAzimuth') }}<output>{{ settings.lightAzimuth }}°</output></span><input type="range" min="0" max="360" step="1" :aria-label="t('lightAzimuth')" :value="settings.lightAzimuth" @input="slider($event, 'lightAzimuth')"></label>
+        <label class="slider-row"><span>{{ t('lightElevation') }}<output>{{ settings.lightElevation }}°</output></span><input type="range" min="10" max="85" step="1" :aria-label="t('lightElevation')" :value="settings.lightElevation" @input="slider($event, 'lightElevation')"></label></template>
         <label class="slider-row"><span>{{ t('lightIntensity') }}<output>{{ settings.lightIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="8" step="0.1" :aria-label="t('lightIntensity')" :value="settings.lightIntensity" @input="slider($event, 'lightIntensity')"></label>
         <label class="slider-row"><span>{{ t('environmentIntensity') }}<output>{{ settings.environmentIntensity.toFixed(1) }}</output></span><input type="range" min="0" max="3" step="0.1" :aria-label="t('environmentIntensity')" :value="settings.environmentIntensity" @input="slider($event, 'environmentIntensity')"></label>
       <button type="button" class="reset-button" @click="reset">{{ t('resetViewportSettings') }}</button>

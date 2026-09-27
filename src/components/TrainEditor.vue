@@ -85,6 +85,7 @@ function sceneResizeKey(event: KeyboardEvent) {
 const cameraView = ref<'perspective'|'front'|'back'|'left'|'right'|'top'>('perspective')
 const showConsist = ref(false)
 const history = new EditorHistory<TrainDefinition>({ normalize: trainHistorySnapshot })
+let materialGesture: string | undefined
 const historyTick = ref(0)
 const canUndo = computed(() => { void historyTick.value; return !!train.value && (history.canUndo || history.hasChanges(train.value)) })
 const canRedo = computed(() => { void historyTick.value; return !!train.value && history.canRedo && !history.hasChanges(train.value) })
@@ -164,8 +165,8 @@ watch(train,()=>{if(!hydrating)scheduleSave()},{deep:true,flush:'sync'})
 watch(selectedCarriageId,()=>{selectedLayerId.value='';selectedPartId.value='';selectedInstanceKey.value=''},{flush:'sync'})
 watch(selectedLayerId,()=>{selectedPartId.value=''},{flush:'sync'})
 onMounted(()=>{void load();window.addEventListener('keydown',editorShortcut)})
-onBeforeUnmount(()=>{alive=false;window.removeEventListener('keydown',editorShortcut);if(timer)window.clearTimeout(timer);Object.values(thumbnails.value).forEach(url=>URL.revokeObjectURL(url))})
-function scheduleSave(){queue.markDirty();emit('status','saving');if(timer)window.clearTimeout(timer);timer=window.setTimeout(()=>void flush().catch(()=>{}),800)}
+onBeforeUnmount(()=>{alive=false;window.removeEventListener('keydown',editorShortcut);if(timer)window.clearTimeout(timer);if(materialGesture)void flush().catch(()=>{});Object.values(thumbnails.value).forEach(url=>URL.revokeObjectURL(url))})
+function scheduleSave(){queue.markDirty();emit('status','saving');if(timer)window.clearTimeout(timer);timer=undefined;if(!materialGesture)timer=window.setTimeout(()=>void flush().catch(()=>{}),800)}
 async function flush(){ if(operationPromise)await operationPromise; await flushEdits() }
 async function flushEdits(){
   if(timer)window.clearTimeout(timer);timer=undefined
@@ -286,7 +287,16 @@ function setTextureHash(materialId:string,channel:TextureChannel|undefined,hash:
   if(channel){binding.properties ||= {};binding.properties.maps ||= {};binding.properties.maps[channel]=hash;if(channel==='metalness'||channel==='roughness')binding.properties[channel]=1;if(channel==='emissive')binding.properties.emissive=[1,1,1]}
   else binding.textureAssetId=hash
 }
-function editMaterial(materialId:string,properties:MaterialProperties){perform(()=>{const layer=selectedLayer.value;if(!layer)return;const binding=layer.materialBindings.find(item=>item.materialId===materialId);if(binding)binding.properties=properties;else layer.materialBindings.push({materialId,properties})})}
+function editMaterial(materialId:string,properties:MaterialProperties,commit=true){
+  const layer=selectedLayer.value
+  if(importing.value||!layer||!train.value)return
+  const gesture=`${layer.id}:${materialId}`
+  if(materialGesture!==gesture){history.record(train.value);historyTick.value++;materialGesture=gesture}
+  const binding=layer.materialBindings.find(item=>item.materialId===materialId)
+  if(binding)binding.properties=properties
+  else layer.materialBindings.push({materialId,properties})
+  if(commit){materialGesture=undefined;void flush().catch(()=>{})}
+}
 function resetTexture(materialId:string){perform(()=>{if(selectedLayer.value)selectedLayer.value.materialBindings=selectedLayer.value.materialBindings.filter(item=>item.materialId!==materialId)})}
 function setPartRenderStage(value: string){const layer=selectedLayer.value,part=selectedPartId.value;if(!layer||!part)return;layer.partRenderStages ||= {};if(value)layer.partRenderStages[part]=value as RenderStage;else delete layer.partRenderStages[part]}
 function addInstance(){showConsist.value=true;perform(()=>{if(train.value&&carriage.value){train.value.previewConsist.push({carriageId:carriage.value.id,reversed:false});selectedInstance.value=train.value.previewConsist.length-1;viewMode.value='consist'}})}
@@ -338,7 +348,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
           <div class="hierarchy-tabs"><button :class="{active:showConsist}" @click="showConsist=!showConsist">{{ t('showConsist') }}</button><button :class="{active:treeTab==='model'}" @click="treeTab='model'">{{ t('modelTree') }}</button><button :class="{active:treeTab==='materials'}" @click="treeTab='materials'">{{ t('materials') }}</button></div>
           <label class="tree-search"><Search :size="14" /><input v-model="partQuery" :placeholder="t('searchParts')" /></label>
           <ModelHierarchy v-if="treeTab==='model'" :storage-key="`mtr-pack-studio:tree:${projectPath}:${entry.id}:${selectedCarriageId}`" :name="carriage?.name || ''" :layers="layers" :assets="assets" :query="partQuery" :selected-layer="selectedLayerId" :selected-part="selectedPartId" @select="selectTree" @visibility="toggleVisibility" />
-          <div v-else class="materials-list"><div v-if="!selectedAsset" class="tree-empty">{{ t('selectModelLayer') }}</div><template v-else><MaterialEditor v-for="material in selectedAsset.materials" :key="material.id" :material="material" :binding="selectedLayer?.materialBindings.find(item=>item.materialId===material.id)" @change="editMaterial(material.id,$event)" @texture="replaceTexture(material.id,$event)" @pick="openAssetPicker({kind:'texture',materialId:material.id,channel:$event})" @reset="resetTexture(material.id)" /></template></div>
+          <div v-else class="materials-list"><div v-if="!selectedAsset" class="tree-empty">{{ t('selectModelLayer') }}</div><template v-else><MaterialEditor v-for="material in selectedAsset.materials" :key="material.id" :material="material" :binding="selectedLayer?.materialBindings.find(item=>item.materialId===material.id)" @change="(properties,commit) => editMaterial(material.id,properties,commit)" @texture="replaceTexture(material.id,$event)" @pick="openAssetPicker({kind:'texture',materialId:material.id,channel:$event})" @reset="resetTexture(material.id)" /></template></div>
         </section>
         <footer class="editor-status"><span>{{ layers.length }} {{ t('modelLayers') }}</span><i /> <span>{{ triangleCount.toLocaleString() }} {{ t('triangles') }}</span><i /><span>{{ t('unitsMetres') }}</span><i /><span>+Z {{ t('forward') }}</span><button class="status-back" @click="back"><ArrowLeft :size="13" />{{ t('trains') }}</button><span class="status-right"><Grid3X3 :size="13" />{{ t('gridSize') }}</span></footer>
       </main>

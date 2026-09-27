@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount } from 'vue'
 import { t } from '../i18n'
 import type { MaterialBinding, MaterialProperties, ModelMaterial, TextureChannel } from '../lib/projects'
 
 const props = defineProps<{ material: ModelMaterial; binding?: MaterialBinding }>()
-const emit = defineEmits<{ change: [properties: MaterialProperties]; texture: [channel?: TextureChannel]; pick: [channel?: TextureChannel]; reset: [] }>()
+const emit = defineEmits<{ change: [properties: MaterialProperties, commit?: boolean]; texture: [channel?: TextureChannel]; pick: [channel?: TextureChannel]; reset: [] }>()
 const effective = computed(() => {
   const properties: MaterialProperties = {...props.material.properties}
   for(const [key,value] of Object.entries(props.binding?.properties || {}))if(value!=null)Object.assign(properties,{[key]:value})
@@ -13,8 +13,18 @@ const effective = computed(() => {
 const channels = ['normal','metalness','roughness','emissive','occlusion'] as const
 const channelLabels = {normal:'normalMap',metalness:'metalnessMap',roughness:'roughnessMap',emissive:'emissiveMap',occlusion:'occlusionMap'} as const
 const value = (key: 'metalness'|'roughness'|'opacity'|'normalScale'|'alphaCutoff') => effective.value[key] ?? ({metalness:0,roughness:.8,opacity:props.material.color[3],normalScale:1,alphaCutoff:.1}[key])
-function change<K extends keyof MaterialProperties>(key: K, value: MaterialProperties[K]) { emit('change',{...props.binding?.properties,[key]:value}) }
-function number(event: Event, key: 'metalness'|'roughness'|'opacity'|'normalScale'|'alphaCutoff') { const value=Number((event.target as HTMLInputElement).value);if(Number.isFinite(value))change(key,value) }
+function change<K extends keyof MaterialProperties>(key: K, value: MaterialProperties[K], commit=true) { emit('change',{...props.binding?.properties,[key]:value},commit) }
+type NumericProperty='metalness'|'roughness'|'opacity'|'normalScale'|'alphaCutoff'
+let pendingFrame:number|undefined
+let pendingValue:{key:NumericProperty;value:number}|undefined
+function number(event: Event,key:NumericProperty,final=false) {
+  const value=Number((event.target as HTMLInputElement).value)
+  if(!Number.isFinite(value))return
+  if(final){if(pendingFrame!==undefined)cancelAnimationFrame(pendingFrame);pendingFrame=undefined;pendingValue=undefined;change(key,value);return}
+  pendingValue={key,value}
+  if(pendingFrame===undefined)pendingFrame=requestAnimationFrame(()=>{pendingFrame=undefined;const pending=pendingValue;pendingValue=undefined;if(pending)change(pending.key,pending.value,false)})
+}
+onBeforeUnmount(()=>{if(pendingFrame!==undefined)cancelAnimationFrame(pendingFrame)})
 function mapName(channel: TextureChannel) {return props.binding?.properties?.maps?.[channel] ? t('customTexture') : props.material.properties?.maps?.[channel]?.split(/[\\/]/).pop() || t('noTexture')}
 const emission = computed(() => '#' + (effective.value.emissive || [0,0,0]).map(v=>Math.round(Math.min(1,Math.max(0,v))*255).toString(16).padStart(2,'0')).join(''))
 function setEmission(event: Event) {const hex=(event.target as HTMLInputElement).value;change('emissive',[1,3,5].map(offset=>parseInt(hex.slice(offset,offset+2),16)/255) as [number,number,number])}
@@ -27,13 +37,13 @@ const alphaMode = computed(() => effective.value.alphaMode || (value('opacity')<
     <div class="material-fields">
       <p>{{ t('materialPreviewHint') }}</p>
       <div class="texture"><span>{{ t('baseColorMap') }}<small>{{ binding?.textureAssetId ? t('customTexture') : material.texture || t('solidColor') }}</small></span><button @click="emit('texture')">{{ t('import') }}</button><button @click="emit('pick')">{{ t('chooseFromLibrary') }}</button></div>
-      <label v-for="key in (['metalness','roughness','opacity'] as const)" :key="key"><span>{{ t(key) }}<output>{{ value(key).toFixed(2) }}</output></span><input type="range" min="0" max="1" step="0.01" :aria-label="`${material.name} ${t(key)}`" :value="value(key)" @change="number($event,key)"/></label>
+      <label v-for="key in (['metalness','roughness','opacity'] as const)" :key="key"><span>{{ t(key) }}<output>{{ value(key).toFixed(2) }}</output></span><input type="range" min="0" max="1" step="0.01" :aria-label="`${material.name} ${t(key)}`" :value="value(key)" @input="number($event,key)" @change="number($event,key,true)"/></label>
       <label class="inline">{{ t('emissiveColor') }}<input type="color" :value="emission" @change="setEmission"/></label>
       <label class="inline">{{ t('alphaMode') }}<select :value="alphaMode" @change="change('alphaMode',($event.target as HTMLSelectElement).value as MaterialProperties['alphaMode'])"><option value="OPAQUE">{{ t('alphaOpaque') }}</option><option value="MASK">{{ t('alphaMask') }}</option><option value="BLEND">{{ t('alphaBlend') }}</option></select></label>
-      <label v-if="alphaMode==='MASK'"><span>{{ t('alphaCutoff') }}<output>{{ value('alphaCutoff').toFixed(2) }}</output></span><input type="range" min="0" max="1" step="0.01" :value="value('alphaCutoff')" @change="number($event,'alphaCutoff')"/></label>
+      <label v-if="alphaMode==='MASK'"><span>{{ t('alphaCutoff') }}<output>{{ value('alphaCutoff').toFixed(2) }}</output></span><input type="range" min="0" max="1" step="0.01" :value="value('alphaCutoff')" @input="number($event,'alphaCutoff')" @change="number($event,'alphaCutoff',true)"/></label>
       <label class="inline">{{ t('doubleSided') }}<input type="checkbox" :checked="effective.doubleSided ?? true" @change="change('doubleSided',($event.target as HTMLInputElement).checked)"/></label>
       <div v-for="channel in channels" :key="channel" class="texture"><span>{{ t(channelLabels[channel]) }}<small>{{ mapName(channel) }}</small></span><button @click="emit('texture',channel)">{{ t('import') }}</button><button @click="emit('pick',channel)">{{ t('chooseFromLibrary') }}</button></div>
-      <label><span>{{ t('normalScale') }}<output>{{ value('normalScale').toFixed(2) }}</output></span><input type="range" min="0" max="4" step="0.05" :value="value('normalScale')" @change="number($event,'normalScale')"/></label>
+      <label><span>{{ t('normalScale') }}<output>{{ value('normalScale').toFixed(2) }}</output></span><input type="range" min="0" max="4" step="0.05" :value="value('normalScale')" @input="number($event,'normalScale')" @change="number($event,'normalScale',true)"/></label>
       <button v-if="binding" class="reset" @click="emit('reset')">{{ t('resetMaterial') }}</button>
     </div>
   </details>

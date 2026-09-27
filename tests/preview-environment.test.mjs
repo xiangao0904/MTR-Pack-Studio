@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
 import { PreviewEnvironment } from '../src/lib/preview-environment.ts'
-import { previewLightDirection } from '../src/lib/preview-environment-map.ts'
+import { minecraftSunDirection, previewLightDirection } from '../src/lib/preview-environment-map.ts'
 import { defaultViewportSettings } from '../src/lib/viewport-settings.ts'
 
 function fixture() {
@@ -102,12 +102,12 @@ test('Minecraft ground remains one metre per tile and cleans scenery and shadow 
 })
 
 test('sun and light agree and shadow frustum includes model plus low-angle ground projection',()=>{
-  const f=fixture(),settings={...defaultViewportSettings('minecraft'),lightAzimuth:215,lightElevation:10,shadowQuality:'high',ground:false}
+  const f=fixture(),settings={...defaultViewportSettings('minecraft'),timeOfDay:8,shadowQuality:'high',ground:false}
   f.environment.apply(f.root,'minecraft',settings)
   let light;f.scene.traverse(object=>{if(object instanceof THREE.DirectionalLight)light=object})
   assert.equal(light.shadow.mapSize.x,4096);assert.equal(light.castShadow,true)
   const direction=light.position.clone().sub(light.target.position).normalize()
-  assert.ok(direction.distanceTo(previewLightDirection(settings))<1e-10)
+  assert.ok(direction.distanceTo(minecraftSunDirection(settings))<1e-10)
   const camera=light.shadow.camera;camera.updateMatrixWorld(true)
   const bounds=new THREE.Box3().setFromObject(f.root)
   const points=[bounds.min.clone(),bounds.max.clone(),new THREE.Vector3(bounds.min.x,bounds.max.y,bounds.max.z),new THREE.Vector3(bounds.max.x,bounds.max.y,bounds.min.z)]
@@ -168,7 +168,7 @@ test('slider updates keep model materials, ground, clouds and shadow targets ali
   let disposed=0
   material[0].addEventListener('dispose',()=>disposed++)
   shadowMap.addEventListener('dispose',()=>disposed++)
-  const changed={...initial,lightAzimuth:210,lightElevation:20,lightIntensity:4,lightSize:6,environmentIntensity:1.2,indirectIntensity:.5,skyHaze:.6,cloudCover:.9}
+  const changed={...initial,timeOfDay:10,lightIntensity:4,lightSize:6,environmentIntensity:1.2,indirectIntensity:.5,skyHaze:.6,cloudCover:.9}
   assert.equal(f.environment.updateSettings('minecraft',changed),true)
   assert.equal(f.mesh.material,material);assert.equal(f.scene.getObjectByName('Minecraft block clouds'),clouds)
   assert.equal(f.scene.fog,fog);assert.equal(f.scene.environmentIntensity,1.2)

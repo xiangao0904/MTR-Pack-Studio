@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { minecraftAtmosphere } from './minecraft-sky.ts'
 import { applyPreviewLighting, createPreviewLighting, penumbraRadius, type PreviewLighting } from './preview-lighting.ts'
-import { previewLightDirection } from './preview-environment-map.ts'
+import { minecraftSunDirection, previewLightDirection } from './preview-environment-map.ts'
 import { normalizeViewportSettings, type PreviewRenderMode, type ViewportSettings } from './viewport-settings.ts'
 export type { PreviewRenderMode } from './viewport-settings.ts'
 
@@ -103,12 +103,12 @@ export class PreviewEnvironment {
     if(this.bounds.isEmpty())this.bounds.set(new THREE.Vector3(-1,0,-1),new THREE.Vector3(1,2,1))
     this.scene.background=mode==='minecraft' && this.skyBackground ? this.skyBackground : new THREE.Color(mode==='minecraft'?0x83b6f4:mode==='material'?0x202226:0x191b1f)
     this.scene.fog=null;this.scene.environment=this.environmentMap??null
-    this.scene.environmentIntensity=this.settings.environmentIntensity
+    this.scene.environmentIntensity=this.settings.environmentIntensity*(mode==='minecraft'?minecraftAtmosphere(this.settings).environmentFactor:1)
     const center=this.bounds.getCenter(new THREE.Vector3()),extent=this.bounds.getSize(new THREE.Vector3())
     const size=Math.max(512,Math.ceil(Math.max(extent.x,extent.z))*2)
     if(mode==='minecraft')this.createMinecraftScenery(center,size)
     else if(mode==='material'&&this.settings.ground)this.createNeutralGround(center,size)
-    const light=new THREE.DirectionalLight(mode==='minecraft'?minecraftAtmosphere(this.settings).sun:0xffffff,this.settings.lightIntensity)
+    const light=new THREE.DirectionalLight(mode==='minecraft'?minecraftAtmosphere(this.settings).sun:0xffffff,this.settings.lightIntensity*(mode==='minecraft'?minecraftAtmosphere(this.settings).directFactor:1))
     const direction=this.lightDirection();light.position.copy(center).addScaledVector(direction,Math.max(30,extent.length()*2));light.target.position.copy(center)
     light.castShadow=true;light.shadow.mapSize.setScalar(this.settings.shadowQuality==='high'?4096:2048)
     light.shadow.bias=-.00005;light.shadow.normalBias=.008
@@ -123,12 +123,12 @@ export class PreviewEnvironment {
     if (mode !== this.mode || (mode === 'material' && settings.ground !== this.settings.ground) || !this.lights.length) return false
     const previous=this.settings
     this.settings=normalizeViewportSettings(mode,settings)
-    this.scene.environmentIntensity=this.settings.environmentIntensity
+    this.scene.environmentIntensity=this.settings.environmentIntensity*(mode==='minecraft'?minecraftAtmosphere(this.settings).environmentFactor:1)
     const light=this.lights[0]!
-    light.intensity=this.settings.lightIntensity
+    light.intensity=this.settings.lightIntensity*(mode==='minecraft'?minecraftAtmosphere(this.settings).directFactor:1)
     light.color.copy(mode==='minecraft'?minecraftAtmosphere(this.settings).sun:new THREE.Color(0xffffff))
     if (previous.shadowQuality !== this.settings.shadowQuality) light.shadow.mapSize.setScalar(this.settings.shadowQuality==='high'?4096:2048)
-    if (previous.lightAzimuth !== this.settings.lightAzimuth || previous.lightElevation !== this.settings.lightElevation || previous.lightSize !== this.settings.lightSize || previous.shadowQuality !== this.settings.shadowQuality) {
+    if (previous.lightAzimuth !== this.settings.lightAzimuth || previous.lightElevation !== this.settings.lightElevation || previous.timeOfDay !== this.settings.timeOfDay || previous.lightSize !== this.settings.lightSize || previous.shadowQuality !== this.settings.shadowQuality) {
       const center=this.bounds.getCenter(new THREE.Vector3()),extent=this.bounds.getSize(new THREE.Vector3()),direction=this.lightDirection()
       light.position.copy(center).addScaledVector(direction,Math.max(30,extent.length()*2))
       light.target.position.copy(center)
@@ -154,7 +154,7 @@ export class PreviewEnvironment {
     this.scene.environment=this.environmentMap??null
     if(this.mode==='minecraft' && this.skyBackground)this.scene.background=this.skyBackground
   }
-  private lightDirection() { return previewLightDirection(this.settings) }
+  private lightDirection() { const sun=minecraftSunDirection(this.settings);return this.mode==='minecraft'?(sun.y<0?sun.negate():sun):previewLightDirection(this.settings) }
   private fitShadow(light: THREE.DirectionalLight,direction: THREE.Vector3) {
     const points=corners(this.bounds)
     const groundY=this.mode==='minecraft'||(this.mode==='material'&&this.settings.ground)?this.groundY:GROUND_Y

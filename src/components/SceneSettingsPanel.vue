@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '../i18n'
-import { defaultViewportSettings, renderModes, type PreviewRenderMode, type ViewportSettings } from '../lib/viewport-settings'
+import { defaultViewportSettings, formatTimeOfDay, renderModes, type PreviewRenderMode, type ViewportSettings } from '../lib/viewport-settings'
 import { builtInRails } from '../lib/rail-preview-options'
 
 const props = defineProps<{
@@ -52,7 +52,8 @@ function reset() {
     </div>
     <div class="scene-section">
       <h3>{{ t('sceneLighting') }}</h3>
-      <label v-for="item in sliders" :key="item.key" class="scene-slider"><span>{{ t(item.label) }}<output>{{ settings[item.key] }}{{ item.unit }}</output></span><input type="range" :min="item.min" :max="item.max" :step="item.step" :value="settings[item.key]" @input="update(item.key, Number(($event.target as HTMLInputElement).value))" /></label>
+      <label v-if="mode==='minecraft'" class="scene-slider"><span>{{ t('timeOfDay') }}<output>{{ formatTimeOfDay(settings.timeOfDay) }}</output></span><input type="range" min="0" max="24" step="0.25" :value="settings.timeOfDay" @input="update('timeOfDay',Number(($event.target as HTMLInputElement).value))" /></label>
+      <label v-for="item in sliders.filter(item=>mode!=='minecraft'||(item.key!=='lightAzimuth'&&item.key!=='lightElevation'))" :key="item.key" class="scene-slider"><span>{{ t(item.label) }}<output>{{ settings[item.key] }}{{ item.unit }}</output></span><input type="range" :min="item.min" :max="item.max" :step="item.step" :value="settings[item.key]" @input="update(item.key, Number(($event.target as HTMLInputElement).value))" /></label>
       <template v-if="mode === 'minecraft'"><label class="scene-slider"><span>{{ t('cloudCover') }}<output>{{ Math.round(settings.cloudCover * 100) }}%</output></span><input type="range" min="0" max="1" step="0.05" :value="settings.cloudCover" @input="update('cloudCover', Number(($event.target as HTMLInputElement).value))" /></label><label class="scene-slider"><span>{{ t('skyHaze') }}<output>{{ Math.round(settings.skyHaze * 100) }}%</output></span><input type="range" min="0" max="1" step="0.05" :value="settings.skyHaze" @input="update('skyHaze', Number(($event.target as HTMLInputElement).value))" /></label></template>
     </div>
     <div class="scene-section">
