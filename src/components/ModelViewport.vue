@@ -233,6 +233,7 @@ async function rebuild() {
   const retainPrevious = !!previous && [...contentCache.values()].includes(previous)
   if (!retainPrevious) pipeline?.clearMaterials()
   environment?.replaceObjects(previous,content,previewRoot,retainPrevious)
+  if(props.renderMode==='minecraft')scheduleMinecraftReflections()
   if (previous && previous !== content && !retainPrevious) disposeCachedContent(previous)
   if (cached) { contentCache.delete(signature); contentCache.set(signature,cached) }
   applyMaterialOverrides()
@@ -450,10 +451,26 @@ function updateEnvironment() {
   if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings), environmentMap.background)
   environment?.apply(previewRoot, props.renderMode, settings, props.groundHeight)
   applyMaterialOverrides()
+  if(props.renderMode==='minecraft')scheduleMinecraftReflections()
   pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).illumination:1))
   if(renderer)filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe)
   if (renderer) { renderer.shadowMap.enabled = true; renderer.shadowMap.needsUpdate = true }
+}
+function scheduleMinecraftReflections() {
+  if(skyTimer!==undefined)clearTimeout(skyTimer)
+  skyTimer=window.setTimeout(()=>{
+    skyTimer=undefined
+    if(disposed || !scene || !environment || !environmentMap || props.renderMode!=='minecraft')return
+    const latest=normalizeViewportSettings(props.renderMode,props.settings)
+    environment.setEnvironmentMap(environmentMap.update('minecraft',latest),environmentMap.background)
+    environment.refreshEnvironment()
+    const hidden=grid?[previewRoot,grid]:[previewRoot]
+    try {
+      environment.setEnvironmentMap(environmentMap.captureMinecraftScene(scene,environment.reflectionCapturePosition(),hidden),environmentMap.background)
+      environment.refreshEnvironment()
+    } catch(cause) { emit('error',cause instanceof Error?cause.message:String(cause)) }
+  },120)
 }
 function updateViewportSettings() {
   lightingTween=undefined
@@ -466,7 +483,8 @@ function updateViewportSettings() {
   pipeline?.setAO(settings.ambientOcclusion && !props.wireframe)
   pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).illumination:1))
   if(!previous || previous.lightAzimuth!==settings.lightAzimuth || previous.lightElevation!==settings.lightElevation || previous.timeOfDay!==settings.timeOfDay || previous.lightSize!==settings.lightSize || previous.shadowQuality!==settings.shadowQuality)renderer.shadowMap.needsUpdate=true
-  if(environmentMap.needsUpdate(props.renderMode,settings)) {
+  if(props.renderMode==='minecraft')scheduleMinecraftReflections()
+  else if(environmentMap.needsUpdate(props.renderMode,settings)) {
     if(skyTimer!==undefined)clearTimeout(skyTimer)
     skyTimer=window.setTimeout(()=>{
       skyTimer=undefined

@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
 import { PreviewEnvironment } from '../src/lib/preview-environment.ts'
-import { minecraftKeyLightDirection, minecraftSunDirection, previewLightDirection } from '../src/lib/preview-environment-map.ts'
+import { PreviewEnvironmentMap, minecraftKeyLightDirection, minecraftSunDirection, previewLightDirection } from '../src/lib/preview-environment-map.ts'
 import { defaultViewportSettings } from '../src/lib/viewport-settings.ts'
 
 function fixture() {
@@ -99,6 +99,35 @@ test('Minecraft ground remains one metre per tile and cleans scenery and shadow 
   light.shadow.map=new THREE.WebGLRenderTarget(8,8);light.shadow.map.addEventListener('dispose',()=>shadowDisposed++)
   f.environment.dispose();assert.equal(geometryDisposed,1);assert.equal(textureDisposed,1);assert.equal(shadowDisposed,1)
   assert.equal(f.scene.fog,null);assert.deepEqual(f.scene.children,[f.root]);f.dispose()
+})
+
+test('reflection probe follows the carriage and stays above the grass floor',()=>{
+  const f=fixture();f.mesh.position.set(12,2,35)
+  f.environment.apply(f.root,'minecraft')
+  const position=f.environment.reflectionCapturePosition()
+  assert.equal(position.x,12);assert.equal(position.z,35)
+  assert.ok(position.y>=.48)
+  f.environment.dispose();f.dispose()
+})
+
+test('Minecraft reflection capture excludes the model and restores visibility',()=>{
+  const map=new PreviewEnvironmentMap({}),scene=new THREE.Scene(),model=new THREE.Group(),grid=new THREE.Group()
+  grid.visible=false
+  const position=new THREE.Vector3(2,3,4)
+  let captured=false
+  map.generator.fromScene=(source,_sigma,_near,_far,options)=>{
+    assert.equal(source,scene);assert.equal(options.position,position)
+    assert.equal(model.visible,false);assert.equal(grid.visible,false)
+    captured=true
+    return new THREE.WebGLRenderTarget(4,4)
+  }
+  const texture=map.captureMinecraftScene(scene,position,[model,grid])
+  assert.equal(captured,true);assert.ok(texture instanceof THREE.Texture)
+  assert.equal(model.visible,true);assert.equal(grid.visible,false)
+  map.generator.fromScene=()=>{throw new Error('capture failed')}
+  assert.throws(()=>map.captureMinecraftScene(scene,position,[model,grid]),/capture failed/)
+  assert.equal(model.visible,true);assert.equal(grid.visible,false)
+  map.dispose()
 })
 
 test('sun and light agree and shadow frustum includes model plus low-angle ground projection',()=>{

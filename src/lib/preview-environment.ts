@@ -32,6 +32,11 @@ export class PreviewEnvironment {
   private lighting: PreviewLighting
   constructor(scene: THREE.Scene, environmentMap?: THREE.Texture, lighting = createPreviewLighting()) { this.scene=scene;this.environmentMap=environmentMap;this.lighting=lighting;scene.add(this.scenery) }
   setEnvironmentMap(texture: THREE.Texture, background?: THREE.Texture) { this.environmentMap=texture;this.skyBackground=background }
+  reflectionCapturePosition() {
+    const center=this.bounds.getCenter(new THREE.Vector3())
+    center.y=Math.max(center.y,this.groundY+1.5)
+    return center
+  }
   lightingMood(): PreviewLightingMood { return {environment:this.scene.environmentIntensity,direct:this.lights[0]?.intensity??0,fill:this.fill?.intensity??0,color:this.lights[0]?.color.clone()??new THREE.Color(0xffffff)} }
   blendLighting(from: PreviewLightingMood, to: PreviewLightingMood, amount: number) {
     this.scene.environmentIntensity=THREE.MathUtils.lerp(from.environment,to.environment,amount)

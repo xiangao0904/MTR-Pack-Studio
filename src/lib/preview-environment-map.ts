@@ -40,6 +40,7 @@ export function createEnvironmentTexture(_mode: Exclude<PreviewRenderMode, 'mine
 export class PreviewEnvironmentMap {
   private generator: THREE.PMREMGenerator
   private target?: THREE.WebGLRenderTarget
+  private reflectionTarget?: THREE.WebGLRenderTarget
   private signature = ''
   private sky = new MinecraftSky()
   private skyCube = new THREE.WebGLCubeRenderTarget(256, {type: THREE.HalfFloatType})
@@ -62,5 +63,18 @@ export class PreviewEnvironmentMap {
     }
     return this.target!.texture
   }
-  dispose() { this.target?.dispose(); this.sky.dispose(); this.skyCube.dispose(); this.generator.dispose() }
+  /** Capture the visible Minecraft ground and clouds under the current sky and lights. */
+  captureMinecraftScene(scene: THREE.Scene, position: THREE.Vector3, hidden: THREE.Object3D[]) {
+    const visibility=hidden.map(object=>object.visible)
+    try {
+      hidden.forEach(object=>{object.visible=false})
+      const next=this.generator.fromScene(scene,0,.1,1000,{size:128,position})
+      this.reflectionTarget?.dispose()
+      this.reflectionTarget=next
+      return next.texture
+    } finally {
+      hidden.forEach((object,index)=>{object.visible=visibility[index]!})
+    }
+  }
+  dispose() { this.target?.dispose(); this.reflectionTarget?.dispose(); this.sky.dispose(); this.skyCube.dispose(); this.generator.dispose() }
 }
