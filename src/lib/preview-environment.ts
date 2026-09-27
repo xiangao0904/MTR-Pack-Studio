@@ -1,12 +1,12 @@
 import * as THREE from 'three'
 import { minecraftAtmosphere } from './minecraft-sky.ts'
 import { applyPreviewLighting, createPreviewLighting, penumbraRadius, type PreviewLighting } from './preview-lighting.ts'
-import { minecraftSunDirection, previewLightDirection } from './preview-environment-map.ts'
+import { minecraftKeyLightDirection, previewLightDirection } from './preview-environment-map.ts'
 import { normalizeViewportSettings, type PreviewRenderMode, type ViewportSettings } from './viewport-settings.ts'
 export type { PreviewRenderMode } from './viewport-settings.ts'
 
 type MeshState = {material: THREE.Material | THREE.Material[]; castShadow: boolean; receiveShadow: boolean}
-export type PreviewLightingMood = { environment: number; direct: number; color: THREE.Color }
+export type PreviewLightingMood = { environment: number; direct: number; fill: number; color: THREE.Color }
 const GROUND_Y = -.02
 const PREVIEW_GROUND_Y = GROUND_Y - 1
 const corners = (box: THREE.Box3) => [0,1,2,3,4,5,6,7].map(index => new THREE.Vector3(index&1 ? box.max.x : box.min.x,index&2 ? box.max.y : box.min.y,index&4 ? box.max.z : box.min.z))
@@ -23,6 +23,7 @@ export class PreviewEnvironment {
   private textures = new Set<THREE.Texture>()
   private geometry = new Set<THREE.BufferGeometry>()
   private lights: THREE.DirectionalLight[] = []
+  private fill?: THREE.HemisphereLight
   private bounds = new THREE.Box3()
   private groundY = PREVIEW_GROUND_Y
   private mode: PreviewRenderMode = 'studio'
@@ -31,10 +32,11 @@ export class PreviewEnvironment {
   private lighting: PreviewLighting
   constructor(scene: THREE.Scene, environmentMap?: THREE.Texture, lighting = createPreviewLighting()) { this.scene=scene;this.environmentMap=environmentMap;this.lighting=lighting;scene.add(this.scenery) }
   setEnvironmentMap(texture: THREE.Texture, background?: THREE.Texture) { this.environmentMap=texture;this.skyBackground=background }
-  lightingMood(): PreviewLightingMood { return {environment:this.scene.environmentIntensity,direct:this.lights[0]?.intensity??0,color:this.lights[0]?.color.clone()??new THREE.Color(0xffffff)} }
+  lightingMood(): PreviewLightingMood { return {environment:this.scene.environmentIntensity,direct:this.lights[0]?.intensity??0,fill:this.fill?.intensity??0,color:this.lights[0]?.color.clone()??new THREE.Color(0xffffff)} }
   blendLighting(from: PreviewLightingMood, to: PreviewLightingMood, amount: number) {
     this.scene.environmentIntensity=THREE.MathUtils.lerp(from.environment,to.environment,amount)
     if(this.lights[0]){this.lights[0].intensity=THREE.MathUtils.lerp(from.direct,to.direct,amount);this.lights[0].color.copy(from.color).lerp(to.color,amount)}
+    if(this.fill)this.fill.intensity=THREE.MathUtils.lerp(from.fill,to.fill,amount)
   }
 
   restoreMaterials() {
@@ -91,7 +93,7 @@ export class PreviewEnvironment {
   private clearScenery() {
     if(this.clouds && !this.clouds.parent)this.clouds.dispose()
     for (const light of this.lights) light.shadow.dispose()
-    this.lights=[]
+    this.lights=[];this.fill=undefined
     for (const geometry of this.geometry) geometry.dispose()
     this.geometry.clear();this.scenery.traverse(object=>{if(object instanceof THREE.InstancedMesh)object.dispose()});this.scenery.clear();this.clouds=undefined
   }
@@ -103,16 +105,21 @@ export class PreviewEnvironment {
     if(this.bounds.isEmpty())this.bounds.set(new THREE.Vector3(-1,0,-1),new THREE.Vector3(1,2,1))
     this.scene.background=mode==='minecraft' && this.skyBackground ? this.skyBackground : new THREE.Color(mode==='minecraft'?0x83b6f4:mode==='material'?0x202226:0x191b1f)
     this.scene.fog=null;this.scene.environment=this.environmentMap??null
-    this.scene.environmentIntensity=this.settings.environmentIntensity*(mode==='minecraft'?minecraftAtmosphere(this.settings).environmentFactor:1)
+    const atmosphere=mode==='minecraft'?minecraftAtmosphere(this.settings):undefined
+    this.scene.environmentIntensity=this.settings.environmentIntensity*(atmosphere?.environmentFactor??1)
     const center=this.bounds.getCenter(new THREE.Vector3()),extent=this.bounds.getSize(new THREE.Vector3())
     const size=Math.max(512,Math.ceil(Math.max(extent.x,extent.z))*2)
     if(mode==='minecraft')this.createMinecraftScenery(center,size)
     else if(mode==='material'&&this.settings.ground)this.createNeutralGround(center,size)
-    const light=new THREE.DirectionalLight(mode==='minecraft'?minecraftAtmosphere(this.settings).sun:0xffffff,this.settings.lightIntensity*(mode==='minecraft'?minecraftAtmosphere(this.settings).directFactor:1))
+    const light=new THREE.DirectionalLight(atmosphere?.sun??0xffffff,this.settings.lightIntensity*(atmosphere?.directFactor??1))
     const direction=this.lightDirection();light.position.copy(center).addScaledVector(direction,Math.max(30,extent.length()*2));light.target.position.copy(center)
     light.castShadow=true;light.shadow.mapSize.setScalar(this.settings.shadowQuality==='high'?4096:2048)
     light.shadow.bias=-.00005;light.shadow.normalBias=.008
     this.lights.push(light);this.scenery.add(light,light.target);this.fitShadow(light,direction)
+    if(atmosphere){
+      this.fill=new THREE.HemisphereLight(atmosphere.horizon.clone().lerp(atmosphere.zenith,.35),new THREE.Color(.08,.09,.13),atmosphere.fillFactor*this.settings.environmentIntensity)
+      this.scenery.add(this.fill)
+    }
     const camera=light.shadow.camera
     this.lighting.previewShadowExtent.value.set(camera.right-camera.left,camera.top-camera.bottom,camera.far-camera.near)
     this.lighting.previewLightRadius.value=penumbraRadius(1,this.settings.lightSize)
@@ -123,10 +130,12 @@ export class PreviewEnvironment {
     if (mode !== this.mode || (mode === 'material' && settings.ground !== this.settings.ground) || !this.lights.length) return false
     const previous=this.settings
     this.settings=normalizeViewportSettings(mode,settings)
-    this.scene.environmentIntensity=this.settings.environmentIntensity*(mode==='minecraft'?minecraftAtmosphere(this.settings).environmentFactor:1)
+    const atmosphere=mode==='minecraft'?minecraftAtmosphere(this.settings):undefined
+    this.scene.environmentIntensity=this.settings.environmentIntensity*(atmosphere?.environmentFactor??1)
     const light=this.lights[0]!
-    light.intensity=this.settings.lightIntensity*(mode==='minecraft'?minecraftAtmosphere(this.settings).directFactor:1)
-    light.color.copy(mode==='minecraft'?minecraftAtmosphere(this.settings).sun:new THREE.Color(0xffffff))
+    light.intensity=this.settings.lightIntensity*(atmosphere?.directFactor??1)
+    light.color.copy(atmosphere?.sun??new THREE.Color(0xffffff))
+    if(atmosphere&&this.fill){this.fill.color.copy(atmosphere.horizon).lerp(atmosphere.zenith,.35);this.fill.intensity=atmosphere.fillFactor*this.settings.environmentIntensity}
     if (previous.shadowQuality !== this.settings.shadowQuality) light.shadow.mapSize.setScalar(this.settings.shadowQuality==='high'?4096:2048)
     if (previous.lightAzimuth !== this.settings.lightAzimuth || previous.lightElevation !== this.settings.lightElevation || previous.timeOfDay !== this.settings.timeOfDay || previous.lightSize !== this.settings.lightSize || previous.shadowQuality !== this.settings.shadowQuality) {
       const center=this.bounds.getCenter(new THREE.Vector3()),extent=this.bounds.getSize(new THREE.Vector3()),direction=this.lightDirection()
@@ -142,7 +151,7 @@ export class PreviewEnvironment {
       const extent=this.bounds.getSize(new THREE.Vector3())
       const size=Math.max(512,Math.ceil(Math.max(extent.x,extent.z))*2)
       if(this.scene.fog instanceof THREE.Fog) {
-        this.scene.fog.color.copy(minecraftAtmosphere(this.settings).horizon)
+        this.scene.fog.color.copy(atmosphere!.horizon)
         this.scene.fog.near=size*(.25-this.settings.skyHaze*.13)
         this.scene.fog.far=size*(.85-this.settings.skyHaze*.25)
       }
@@ -154,7 +163,7 @@ export class PreviewEnvironment {
     this.scene.environment=this.environmentMap??null
     if(this.mode==='minecraft' && this.skyBackground)this.scene.background=this.skyBackground
   }
-  private lightDirection() { const sun=minecraftSunDirection(this.settings);return this.mode==='minecraft'?(sun.y<0?sun.negate():sun):previewLightDirection(this.settings) }
+  private lightDirection() { return this.mode==='minecraft'?minecraftKeyLightDirection(this.settings):previewLightDirection(this.settings) }
   private fitShadow(light: THREE.DirectionalLight,direction: THREE.Vector3) {
     const points=corners(this.bounds)
     const groundY=this.mode==='minecraft'||(this.mode==='material'&&this.settings.ground)?this.groundY:GROUND_Y

@@ -11,6 +11,11 @@ export function minecraftSunDirection(settings: Pick<ViewportSettings,'timeOfDay
   const elevation=Math.sin(phase)*THREE.MathUtils.degToRad(65)
   return new THREE.Vector3(Math.cos(phase)*Math.cos(elevation),Math.sin(elevation),Math.sin(phase)*Math.cos(elevation))
 }
+export function minecraftKeyLightDirection(settings: Pick<ViewportSettings,'timeOfDay'>) {
+  const sun=minecraftSunDirection(settings)
+  // A dim night fill follows the same azimuth; clamping elevation avoids a light flip at sunset.
+  return sun.setY(Math.max(.12,sun.y)).normalize()
+}
 
 /** Neutral studio reflectors. Minecraft uses the GPU-baked atmosphere below. */
 export function createEnvironmentTexture(_mode: Exclude<PreviewRenderMode, 'minecraft'>, settings: ViewportSettings) {

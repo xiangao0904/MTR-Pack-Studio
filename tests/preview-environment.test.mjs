@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
 import { PreviewEnvironment } from '../src/lib/preview-environment.ts'
-import { minecraftSunDirection, previewLightDirection } from '../src/lib/preview-environment-map.ts'
+import { minecraftKeyLightDirection, minecraftSunDirection, previewLightDirection } from '../src/lib/preview-environment-map.ts'
 import { defaultViewportSettings } from '../src/lib/viewport-settings.ts'
 
 function fixture() {
@@ -114,6 +114,30 @@ test('sun and light agree and shadow frustum includes model plus low-angle groun
   for(const point of [...points])points.push(point.clone().addScaledVector(direction,-(point.y+1.02)/direction.y))
   for(const point of points){const projected=point.clone().project(camera);assert.ok(Math.abs(projected.x)<=1.001&&Math.abs(projected.y)<=1.001&&Math.abs(projected.z)<=1.001)}
   assert.equal(f.scene.children.flatMap(group=>group.children).filter(object=>object instanceof THREE.Mesh&&object.receiveShadow).length,2)
+  f.dispose()
+})
+
+test('dusk lights train surfaces warmly without a sunset direction flip',()=>{
+  const f=fixture(),settings={...defaultViewportSettings('minecraft'),timeOfDay:18.25}
+  f.environment.apply(f.root,'minecraft',settings)
+  const light=f.scene.getObjectByProperty('type','DirectionalLight')
+  const fill=f.scene.getObjectByProperty('type','HemisphereLight')
+  assert.ok(light instanceof THREE.DirectionalLight)
+  assert.ok(fill instanceof THREE.HemisphereLight)
+  assert.ok(light.color.r>light.color.b*1.5)
+  assert.ok(light.intensity>1)
+  assert.ok(fill.color.r>fill.color.b*2)
+  assert.ok(fill.intensity>.2)
+  assert.ok(f.scene.environmentIntensity>.25)
+  const direction=light.position.clone().sub(light.target.position).normalize()
+  assert.ok(direction.distanceTo(minecraftKeyLightDirection(settings))<1e-10)
+  const before=minecraftKeyLightDirection({...settings,timeOfDay:17.75})
+  const after=minecraftKeyLightDirection({...settings,timeOfDay:18.75})
+  assert.ok(before.dot(after)>.9)
+  const duskFill=fill.intensity
+  f.environment.updateSettings('minecraft',{...settings,timeOfDay:0})
+  assert.ok(fill.intensity<duskFill*.2)
+  assert.equal(f.scene.getObjectByProperty('type','HemisphereLight'),fill)
   f.dispose()
 })
 

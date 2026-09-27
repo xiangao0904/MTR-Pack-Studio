@@ -450,7 +450,7 @@ function updateEnvironment() {
   if (environmentMap) environment?.setEnvironmentMap(environmentMap.update(props.renderMode, settings), environmentMap.background)
   environment?.apply(previewRoot, props.renderMode, settings, props.groundHeight)
   applyMaterialOverrides()
-  pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).daylight:1))
+  pipeline?.setIndirect(props.wireframe ? 0 : settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).illumination:1))
   if(renderer)filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),props.settings?.pixelTextures)
   pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe)
   if (renderer) { renderer.shadowMap.enabled = true; renderer.shadowMap.needsUpdate = true }
@@ -464,7 +464,7 @@ function updateViewportSettings() {
   activeSettings=settings
   if(previous?.pixelTextures!==settings.pixelTextures)filterModelTextures(previewRoot,renderer.capabilities.getMaxAnisotropy(),settings.pixelTextures)
   pipeline?.setAO(settings.ambientOcclusion && !props.wireframe)
-  pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).daylight:1))
+  pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).illumination:1))
   if(!previous || previous.lightAzimuth!==settings.lightAzimuth || previous.lightElevation!==settings.lightElevation || previous.timeOfDay!==settings.timeOfDay || previous.lightSize!==settings.lightSize || previous.shadowQuality!==settings.shadowQuality)renderer.shadowMap.needsUpdate=true
   if(environmentMap.needsUpdate(props.renderMode,settings)) {
     if(skyTimer!==undefined)clearTimeout(skyTimer)
@@ -534,7 +534,7 @@ function updateAdaptiveWireframe() {
     }
   })
 }
-function updateWireframe() { const settings=normalizeViewportSettings(props.renderMode,props.settings);pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).daylight:1));pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;applyWireframeMaterials() }
+function updateWireframe() { const settings=normalizeViewportSettings(props.renderMode,props.settings);pipeline?.setIndirect(props.wireframe?0:settings.indirectIntensity*(props.renderMode==='minecraft'?minecraftAtmosphere(settings).illumination:1));pipeline?.clearMaterials();pipeline?.setAO(props.settings?.ambientOcclusion !== false && !props.wireframe); if(renderer)renderer.shadowMap.needsUpdate=true;applyWireframeMaterials() }
 function updateSelection() {
   if (!scene) return
   selectedObject = undefined

@@ -22,6 +22,19 @@ test('24-hour sky moves through daylight, sunset, and dark night',()=>{
   for(const palette of [day,sunset,night])for(const color of [palette.sun,palette.horizon,palette.zenith])assert.ok(color.toArray().every(Number.isFinite))
 })
 
+test('red twilight keeps warm light and visible surface illumination at 18:15',()=>{
+  const settings=defaultViewportSettings('minecraft')
+  const dusk=minecraftAtmosphere({...settings,timeOfDay:18.25})
+  const night=minecraftAtmosphere({...settings,timeOfDay:0})
+  assert.ok(dusk.horizon.r>dusk.horizon.b*3)
+  assert.ok(dusk.sun.r>dusk.sun.b*1.5)
+  assert.ok(dusk.directFactor>.35)
+  assert.ok(dusk.environmentFactor>.35)
+  assert.ok(dusk.fillFactor>.3)
+  assert.ok(dusk.illumination>night.illumination+.3)
+  assert.ok(night.fillFactor<dusk.fillFactor*.2)
+})
+
 test('sky defaults preserve existing indirect illumination and shadow quality',()=>{
   const settings=normalizeViewportSettings('minecraft',{})
   assert.equal(settings.indirectIntensity,1);assert.equal(settings.ambientOcclusion,true)

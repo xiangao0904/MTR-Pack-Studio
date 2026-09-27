@@ -7,14 +7,17 @@ export function minecraftAtmosphere(settings: ViewportSettings) {
   const altitude = Math.sin((settings.timeOfDay - 6) * Math.PI / 12)
   const daylight = THREE.MathUtils.smoothstep(altitude, -.08, .25)
   const twilight = (1-THREE.MathUtils.smoothstep(Math.abs(altitude), .02, .28))*THREE.MathUtils.smoothstep(altitude, -.2, -.02)
-  const night = 1-daylight
-  const zenith = new THREE.Color().setRGB(.006+.094*daylight,.012+.238*daylight,.035+.605*daylight)
+  // The sky can stay red after the sun sets; surface illumination fades more slowly.
+  const illumination = THREE.MathUtils.smoothstep(altitude, -.28, .24)
+  const zenith = new THREE.Color().setRGB(.006+.094*daylight+.04*twilight,.012+.238*daylight+.02*twilight,.035+.605*daylight+.015*twilight)
   const horizon = new THREE.Color().setRGB(.012+.49*daylight+.60*twilight,.02+.63*daylight+.17*twilight,.045+.77*daylight+.05*twilight)
+  const warmLight=Math.max(illumination,THREE.MathUtils.smoothstep(twilight,.02,.25))
+  const sun = new THREE.Color().setRGB(.42,.49,.76).lerp(new THREE.Color().setRGB(1,.93-.38*twilight,.84-.56*twilight),warmLight)
   return {
     zenith,horizon,
-    sun: new THREE.Color().setRGB(1-.58*night,.93-.44*night-.18*twilight,.84-.08*night-.42*twilight),
-    daylight,sunStrength:THREE.MathUtils.smoothstep(altitude,-.08,.05),
-    directFactor:.03+.97*daylight,environmentFactor:.06+.94*daylight,
+    sun,daylight,twilight,illumination,sunStrength:THREE.MathUtils.smoothstep(altitude,-.22,.05),
+    directFactor:.03+.97*illumination,environmentFactor:.06+.94*illumination,
+    fillFactor:.025+.12*illumination+.4*twilight,
   }
 }
 
