@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, Box, BoxSelect, ChevronRight, Copy, Eye, EyeOff, FileBox, Grid3X3, Maximize, Plus, RotateCw, Search, Trash2, Upload, Undo2, Redo2, TrainTrack } from '@lucide/vue'
-import ModelViewport, { type PreviewLayer } from './ModelViewport.vue'
+import type { PreviewLayer } from './ModelViewport.vue'
+import LoadingProgress from './LoadingProgress.vue'
+const ModelViewport = defineAsyncComponent(() => import('./ModelViewport.vue'))
 import MaterialEditor from './MaterialEditor.vue'
 import type { MaterialProperties, RenderStage, TextureChannel } from '../lib/projects'
 import ModelHierarchy from './ModelHierarchy.vue'
@@ -93,6 +95,15 @@ const tab = ref<Tab>('general')
 const assets = ref<Record<string, AssetDefinition>>({})
 const importing = ref(false)
 const loading = ref(true)
+const loadFailed = ref(false)
+const assetsLoading = ref(false)
+const resourcesLoading = ref(false)
+const resourceDone = ref(0)
+const resourceTotal = ref(0)
+const viewportReady = ref(false)
+const mountViewport = ref(false)
+const previewDone = ref(0)
+const previewTotal = ref(0)
 const carriageQuery = ref('')
 const partQuery = ref('')
 const treeTab = ref<'model' | 'materials'>('model')
@@ -151,16 +162,25 @@ const slotGroups = computed(() => carriage.value ? [
 const placementRule = computed<CarPlacementRule | undefined>(() => !carriage.value ? undefined : selectedPartId.value && selectedLayer.value ? selectedLayer.value.partRules[selectedPartId.value] : carriage.value.placement)
 async function load() {
   try {
+    loadFailed.value=false;loading.value=true
     hydrating=true;train.value=await getTrain(props.projectPath,props.entry.id);selectedCarriageId.value=train.value.carriages[0]?.id||''
-    await loadProjectRails();await loadAssets();history.reset(train.value);historyTick.value++;await nextTick();emit('status','saved');emit('ready')
-  } catch(cause){emit('error',message(cause));emit('status','failed')}
+    history.reset(train.value);historyTick.value++;loading.value=false;void loadResources();await nextTick();emit('status','saved');emit('ready')
+    requestAnimationFrame(()=>{if(alive)mountViewport.value=true})
+  } catch(cause){loadFailed.value=true;emit('error',message(cause));emit('status','failed')}
   finally{hydrating=false;loading.value=false}
 }
-async function loadAssets() {
+async function loadResources() {
   const all=train.value?.carriages.flatMap(car=>[...car.bodyModels,...car.bogie1Models,...car.bogie2Models])||[]
-  await Promise.all([...new Set(all.map(layer=>layer.assetId))].filter(id=>!assets.value[id]).map(async id=>{try{assets.value[id]=await getModelAsset(id)}catch(cause){emit('error',message(cause))}}))
-  await Promise.all((train.value?.carriages||[]).filter(car=>hasModels(car)&&car.thumbnailHash&&!thumbnails.value[car.id]).map(async car=>{try{const bytes=await getImageAsset(car.thumbnailHash!);thumbnails.value[car.id]=URL.createObjectURL(new Blob([bytes],{type:'image/png'}))}catch(cause){emit('error',message(cause))}}))
+  const ids=[...new Set(all.map(layer=>layer.assetId))].filter(id=>!assets.value[id])
+  const covers=(train.value?.carriages||[]).filter(car=>hasModels(car)&&car.thumbnailHash&&!thumbnails.value[car.id])
+  resourceDone.value=0;resourceTotal.value=ids.length+covers.length+1;resourcesLoading.value=true;assetsLoading.value=ids.length>0
+  const step=()=>{resourceDone.value++}
+  const metadata=Promise.all(ids.map(async id=>{try{const asset=await getModelAsset(id);if(alive)assets.value[id]=asset}catch(cause){emit('error',message(cause))}finally{step()}})).finally(()=>{assetsLoading.value=false})
+  const rails=loadProjectRails().catch(cause=>emit('error',message(cause))).finally(step)
+  const coverTasks=Promise.all(covers.map(async car=>{try{const bytes=await getImageAsset(car.thumbnailHash!);if(alive)thumbnails.value[car.id]=URL.createObjectURL(new Blob([bytes],{type:'image/png'}))}catch(cause){emit('error',message(cause))}finally{step()}}))
+  await Promise.all([metadata,rails,coverTasks]);resourcesLoading.value=false
 }
+async function loadAssets(){await loadResources()}
 watch(train,()=>{if(!hydrating)scheduleSave()},{deep:true,flush:'sync'})
 watch(selectedCarriageId,()=>{selectedLayerId.value='';selectedPartId.value='';selectedInstanceKey.value=''},{flush:'sync'})
 watch(selectedLayerId,()=>{selectedPartId.value=''},{flush:'sync'})
@@ -328,6 +348,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
       <ViewportModeControls v-model:mode="renderMode" v-model:settings="viewportSettings[renderMode]" v-model:show-grid="showGrid" v-model:wireframe="wireframe" />
       <div class="tool-spacer" /><button class="editor-export" @click="emit('export')"><Upload :size="18" />{{ t('exportPack') }}</button>
     </header>
+    <div v-if="resourcesLoading" class="editor-load-strip"><LoadingProgress :label="t('loadingAssets')" :current="resourceDone" :total="resourceTotal" /></div>
     <div class="editor-body">
       <aside class="carriage-panel">
         <div class="train-identity"><div class="train-thumbnail"><img :src="thumbnails[selectedCarriageId] || '/images/train-placeholder.svg'" alt="" /></div><div><strong>{{ train.name }}</strong><span>{{ train.exportId }}</span></div></div>
@@ -342,7 +363,7 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
       </aside>
 
       <main :class="['editor-center',{'with-consist':showConsist}]">
-        <section class="viewport-panel"><ModelViewport ref="viewport" :assets="viewportAssets" :guides="viewportGuides" :selected-part="selectedPartId" :selected-layer="selectedLayerId" :selected-instance-key="selectedInstanceKey" :render-mode="renderMode" :settings="viewportSettings[renderMode]" :camera-view="cameraView" :show-rails="showRails" :preview-rail="previewRail" :built-in-rail-id="isBuiltInRailId(railModelId) ? railModelId : ''" :show-grid="showGrid" :wireframe="wireframe" :vehicle-lights-on="vehicleLightsOn" :thumbnail-carriage-id="viewMode==='single' && !simulateRules && !importing && !picker ? selectedCarriageId : undefined" :thumbnail-model-signature="thumbnailModelSignature" :thumbnail-saved-signature="carriage?.thumbnailModelSignature" @select="selection=>selectPart(selection.partId,selection.layerId,selection.carriageId,selection.instanceKey)" @clear-selection="clearSelection" @error="emit('error',$event)" @thumbnail="onThumbnail" /><div v-if="renderMode==='minecraft'" :class="['environment-caption',{'with-warning':selectedAsset?.warnings.length}]" :title="t('minecraftPreviewHint')">{{ t('minecraftScale') }}</div><div class="viewport-badge"><Box :size="14" />{{ carriage?.name }} · {{ carriage?.length }} × {{ carriage?.width }} m</div><div v-if="selectedAsset?.warnings.length" class="model-warning"><AlertTriangle :size="15" />{{ selectedAsset.warnings.join(' ') }}</div></section>
+        <section class="viewport-panel"><ModelViewport v-if="mountViewport && !assetsLoading" ref="viewport" :assets="viewportAssets" :guides="viewportGuides" :selected-part="selectedPartId" :selected-layer="selectedLayerId" :selected-instance-key="selectedInstanceKey" :render-mode="renderMode" :settings="viewportSettings[renderMode]" :camera-view="cameraView" :show-rails="showRails" :preview-rail="previewRail" :built-in-rail-id="isBuiltInRailId(railModelId) ? railModelId : ''" :show-grid="showGrid" :wireframe="wireframe" :vehicle-lights-on="vehicleLightsOn" :thumbnail-carriage-id="viewMode==='single' && !simulateRules && !importing && !picker ? selectedCarriageId : undefined" :thumbnail-model-signature="thumbnailModelSignature" :thumbnail-saved-signature="carriage?.thumbnailModelSignature" @select="selection=>selectPart(selection.partId,selection.layerId,selection.carriageId,selection.instanceKey)" @clear-selection="clearSelection" @error="emit('error',$event)" @thumbnail="onThumbnail" @progress="(done,total)=>{if(done===0)viewportReady=false;previewDone=done;previewTotal=total}" @ready="viewportReady=true" /><div v-if="assetsLoading || !viewportReady" class="viewport-loading"><LoadingProgress :label="assetsLoading?t('loadingAssets'):t('loadingPreview')" :current="assetsLoading?resourceDone:previewDone" :total="assetsLoading?resourceTotal:previewTotal" /></div><div v-if="renderMode==='minecraft'" :class="['environment-caption',{'with-warning':selectedAsset?.warnings.length}]" :title="t('minecraftPreviewHint')">{{ t('minecraftScale') }}</div><div class="viewport-badge"><Box :size="14" />{{ carriage?.name }} · {{ carriage?.length }} × {{ carriage?.width }} m</div><div v-if="selectedAsset?.warnings.length" class="model-warning"><AlertTriangle :size="15" />{{ selectedAsset.warnings.join(' ') }}</div></section>
         <section v-if="showConsist" class="consist-panel"><div class="consist-heading"><select v-model="viewMode" :aria-label="t('previewConsist')"><option value="single">{{ t('singleCarriage') }}</option><option value="consist">{{ t('previewConsist') }}</option></select><button :class="{active:simulateRules}" @click="simulateRules=!simulateRules">{{ t('simulateRules') }}</button><button @click="addInstance"><Plus :size="13" />{{ t('addSelectedCarriage') }}</button><span class="tool-spacer" /><button :disabled="!train.previewConsist[selectedInstance]" :title="t('reverseCarriage')" @click="reverseInstance"><RotateCw :size="14" /></button><button :disabled="selectedInstance===0" :title="t('moveUp')" @click="moveInstance(selectedInstance,selectedInstance-1)"><ArrowLeft :size="14" /></button><button :disabled="selectedInstance>=train.previewConsist.length-1" :title="t('moveDown')" @click="moveInstance(selectedInstance,selectedInstance+1)"><ChevronRight :size="14" /></button><button :disabled="!train.previewConsist.length" :title="t('delete')" @click="removeInstance"><Trash2 :size="14" /></button></div><TransitionGroup name="consist-order" tag="div" class="consist-items"><button v-for="(instance,index) in train.previewConsist" :key="consistKey(instance)" draggable="true" :class="{active:selectedInstance===index}" @dragstart="dragIndex=index" @dragover.prevent @drop.prevent="dropInstance(index)" @click="selectedInstance=index;selectedCarriageId=instance.carriageId"><span>{{ index+1 }}</span>{{ train.carriages.find(item=>item.id===instance.carriageId)?.name }}<span>{{ instance.reversed ? '←' : '→' }}</span></button><small v-if="!train.previewConsist.length" key="empty">{{ t('emptyConsist') }}</small></TransitionGroup></section>
         <section class="hierarchy-panel">
           <div class="hierarchy-tabs"><button :class="{active:showConsist}" @click="showConsist=!showConsist">{{ t('showConsist') }}</button><button :class="{active:treeTab==='model'}" @click="treeTab='model'">{{ t('modelTree') }}</button><button :class="{active:treeTab==='materials'}" @click="treeTab='materials'">{{ t('materials') }}</button></div>
@@ -367,13 +388,17 @@ function message(cause:unknown){return cause instanceof Error?cause.message:Stri
         </div>
       </aside>
     </div>
+    <div v-if="importing" class="editor-busy-progress"><LoadingProgress :label="t('importingAssets')" /></div>
   </fieldset>
-  <div v-else class="editor-loading">{{ t('loading') }}</div>
-  <div v-if="picker" class="asset-picker-scrim" @click.self="picker=undefined"><div class="asset-picker"><header><h2>{{ picker.kind==='model'?t('assetModels'):t('assetTextures') }}</h2><button @click="picker=undefined">{{ t('cancel') }}</button></header><label><Search :size="15" /><input v-model="assetQuery" :placeholder="t('searchAssets')" autofocus /></label><div class="asset-picker-items"><p v-if="catalogLoading">{{ t('loading') }}</p><template v-else><button v-for="item in pickerItems" :key="'id' in item?item.id:item.hash" @click="useAsset('id' in item?item.id:item.hash)"><Box v-if="picker.kind==='model'" :size="20" /><span><strong>{{ item.name }}</strong><small>{{ 'sourceFormat' in item?item.sourceFormat.toUpperCase():`${item.width} × ${item.height}` }}</small></span></button><p v-if="!pickerItems.length">{{ picker.kind==='model'?t('noLibraryModels'):t('noLibraryTextures') }}</p></template></div></div></div>
+  <div v-else class="editor-loading"><button v-if="loadFailed" @click="load">{{ t('retry') }}</button><LoadingProgress v-else :label="t('loadingTrain')" /></div>
+  <div v-if="picker" class="asset-picker-scrim" @click.self="picker=undefined"><div class="asset-picker"><header><h2>{{ picker.kind==='model'?t('assetModels'):t('assetTextures') }}</h2><button @click="picker=undefined">{{ t('cancel') }}</button></header><label><Search :size="15" /><input v-model="assetQuery" :placeholder="t('searchAssets')" autofocus /></label><div class="asset-picker-items"><LoadingProgress v-if="catalogLoading" :label="t('loadingAssets')" /><template v-else><button v-for="item in pickerItems" :key="'id' in item?item.id:item.hash" @click="useAsset('id' in item?item.id:item.hash)"><Box v-if="picker.kind==='model'" :size="20" /><span><strong>{{ item.name }}</strong><small>{{ 'sourceFormat' in item?item.sourceFormat.toUpperCase():`${item.width} × ${item.height}` }}</small></span></button><p v-if="!pickerItems.length">{{ picker.kind==='model'?t('noLibraryModels'):t('noLibraryTextures') }}</p></template></div></div></div>
 </template>
 
 <style scoped>
 .train-editor{--e-bg:var(--studio-bg,#141517);--e-surface:var(--studio-surface,#1b1c1f);--e-raised:var(--studio-raised,#232428);--e-border:var(--studio-border,#303136);--e-text:var(--studio-text,#e8e8ec);--e-muted:var(--studio-muted,#a4a5ad);--e-quiet:var(--studio-quiet,#73757e);--e-hover:var(--studio-hover,#28292e);--e-selected:var(--studio-selected,#33343a);position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;margin:0;padding:0;border:0;overflow:hidden;background:var(--e-bg);color:var(--e-text);font:12px var(--studio-font,'Segoe UI Variable','Segoe UI',sans-serif)}
+.editor-load-strip{position:absolute;z-index:6;top:48px;left:50%;width:min(360px,80%);padding:9px 14px;transform:translateX(-50%);border:1px solid var(--e-border);border-radius:0 0 7px 7px;background:#252a30ed;pointer-events:none}.editor-load-strip :deep(.loading-progress){width:100%}
+.viewport-loading{position:absolute;z-index:4;inset:0;display:grid;place-items:center;background:#191b1feb;pointer-events:none}
+.editor-busy-progress{position:absolute;z-index:8;inset:0;display:grid;place-items:center;background:#191b1fd9}
 .asset-picker-scrim{position:fixed;z-index:1000;inset:0;display:grid;place-items:center;background:#0009}.asset-picker{width:min(440px,90vw);max-height:75vh;display:flex;flex-direction:column;padding:18px;border:1px solid #59636e;border-radius:8px;background:#252a30;color:#edf1f5;box-shadow:0 18px 48px #0008}.asset-picker header{display:flex;align-items:center;justify-content:space-between}.asset-picker h2{font-size:18px;margin:0 0 15px}.asset-picker button{cursor:pointer}.asset-picker header button{border:0;background:none;color:#b6c0cb}.asset-picker label{display:flex;align-items:center;gap:8px;border:1px solid #59636e;border-radius:5px;padding:8px}.asset-picker input{border:0;outline:0;background:none;color:inherit;flex:1}.asset-picker-items{overflow:auto;display:grid;gap:7px;margin-top:12px}.asset-picker-items button{display:flex;align-items:center;gap:12px;text-align:left;padding:10px;border:1px solid #46505a;border-radius:5px;background:#30363d;color:inherit}.asset-picker-items button:hover{border-color:#cedbe9}.asset-picker-items span{display:grid;gap:3px}.asset-picker-items small,.asset-picker-items p{color:#aeb9c5}
 .train-editor button,.train-editor input,.train-editor select,.train-editor textarea{font-family:inherit;box-sizing:border-box}
 .train-editor button{cursor:pointer;transition:background .12s,color .12s}.train-editor button:disabled{opacity:.32;cursor:default}

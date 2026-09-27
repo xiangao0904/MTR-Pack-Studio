@@ -3,8 +3,10 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch 
 import { AlertTriangle, ArrowRight, Box, Database, Home, Monitor, MoreHorizontal, Plus, Search, Settings2, TrainTrack, TrainFront, TreePine, Upload, X } from '@lucide/vue'
 import { t } from '../i18n'
 import ProjectArtwork from './ProjectArtwork.vue'
+import LoadingProgress from './LoadingProgress.vue'
 const RailEditor = defineAsyncComponent(() => import('./RailEditor.vue'))
-const TrainEditor = defineAsyncComponent(() => import('./TrainEditor.vue'))
+const loadTrainEditor = () => import('./TrainEditor.vue')
+const TrainEditor = defineAsyncComponent(loadTrainEditor)
 const AssetLibrary = defineAsyncComponent(() => import('./AssetLibrary.vue'))
 import { chooseExportPath, createRail, createTrain, exportResourcePack, getProject, saveProject, setProjectCover, updateProjectSettings, validateExport, type ContentEntry, type ExportOptions, type ProjectData, type ProjectSummary, type ValidationIssue } from '../lib/projects'
 
@@ -14,6 +16,8 @@ type Section = 'overview' | 'all' | 'trains' | 'rails' | 'objects' | 'pids' | 'a
 const section = ref<Section>('overview')
 const data = ref<ProjectData | null>(null)
 const loading = ref(true)
+const openingEntry = ref(false)
+const waitingLabel = ref(t('openingEditor'))
 const error = ref('')
 const query = ref('')
 const creating = ref(false)
@@ -22,6 +26,7 @@ function startCreate(kind: 'train'|'rail') { creatingKind.value=kind; creating.v
 async function removedRail() { selectedTrain.value=null; section.value='rails'; await load() }
 const trainName = ref('')
 const busy = ref(false)
+const settingsBusy = ref(false)
 const selectedTrain = ref<ContentEntry | null>(null)
 const notice = ref('')
 const saveStatus = ref<'saving' | 'saved' | 'failed'>('saved')
@@ -39,6 +44,7 @@ let settingsTimer: ReturnType<typeof setTimeout> | undefined
 let settingsWrite: Promise<void> | null = null
 const exportOpen = ref(false)
 const exportBusy = ref(false)
+const exportStage = ref(t('validating'))
 const exportIssues = ref<ValidationIssue[]>([])
 const exportOptions = ref<ExportOptions>(JSON.parse(localStorage.getItem('mtr-pack-studio:last-export') || 'null') || { target: 'mtr4', minecraftVersion: '1.20.4', modelFormat: 'obj' })
 const mtr3Versions = ['1.16.5', '1.17.1', '1.18.2', '1.19.2', '1.19.3', '1.19.4', '1.20.1']
@@ -52,7 +58,7 @@ async function load() {
   loading.value = true
   try { data.value = await getProject(props.project.path); settingsNamespace.value = data.value.namespace; settingsDescription.value = data.value.description; error.value = '' }
   catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
-  finally { loading.value = false }
+  finally { loading.value = false; if(data.value) { const prefetch = () => { void loadTrainEditor() }; if('requestIdleCallback' in window) window.requestIdleCallback(prefetch); else setTimeout(prefetch,250) } }
 }
 onMounted(() => { load(); window.addEventListener('keydown', saveShortcut) })
 onBeforeUnmount(() => { clearTimeout(settingsTimer); window.removeEventListener('keydown', saveShortcut) })
@@ -71,12 +77,20 @@ async function flushSave() {
   catch (cause) { saveStatus.value = 'failed'; error.value = cause instanceof Error ? cause.message : String(cause); throw cause }
 }
 defineExpose({ flush: flushSave, overview: () => navigate('overview') })
+function hasPendingEdits(){return !!trainEditor.value || !!pendingCover || !!coverWrite || coverBusy.value || !!settingsWrite || settingsNamespace.value !== data.value?.namespace || settingsDescription.value !== data.value?.description}
 async function navigate(next: Section) {
+  if(!hasPendingEdits()){selectedTrain.value=null;section.value=next;return}
+  waitingLabel.value=t('saving');openingEntry.value=true
   try { await flushSave(); selectedTrain.value = null; section.value = next } catch { /* The current editor stays open so the user can retry. */ }
+  finally {openingEntry.value=false}
 }
 async function leaveTrain() { await navigate(selectedTrain.value?.kind === 'rail' ? 'rails' : 'trains') }
 async function openTrain(entry: ContentEntry) {
+  if(openingEntry.value)return
+  if(!hasPendingEdits()){selectedTrain.value=entry;section.value=entry.kind==='rail'?'rails':'trains';return}
+  waitingLabel.value=t('saving');openingEntry.value=true
   try { await flushSave(); selectedTrain.value = entry; section.value = entry.kind === 'rail' ? 'rails' : 'trains' } catch { /* Keep unsaved edits visible. */ }
+  finally { openingEntry.value=false }
 }
 function updateEntry(entry: ContentEntry) {
   if (!data.value) return
@@ -88,9 +102,10 @@ function changeTarget() { exportOptions.value.minecraftVersion = exportOptions.v
 async function submitExport() {
   if (!data.value) return
   try {
-    exportBusy.value = true; await flushSave(); exportIssues.value = await validateExport(exportOptions.value)
+    exportStage.value=t('validating');exportBusy.value = true; await flushSave(); exportIssues.value = await validateExport(exportOptions.value)
     if (exportIssues.value.some(issue => issue.severity === 'error')) return
-    const path = await chooseExportPath(data.value.name, exportOptions.value.target); if (!path) return
+    exportStage.value=t('chooseExportLocation');const path = await chooseExportPath(data.value.name, exportOptions.value.target); if (!path) return
+    exportStage.value=t('exportingPack')
     const report = await exportResourcePack(path, exportOptions.value); localStorage.setItem('mtr-pack-studio:last-export', JSON.stringify(exportOptions.value)); exportOpen.value = false; notice.value = `${t('exportComplete')} ${report.fileCount} ${t('files')}`
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) } finally { exportBusy.value = false }
 }
@@ -121,7 +136,7 @@ async function persistSettings() {
   })()
   try { await settingsWrite } finally { settingsWrite = null }
 }
-async function saveSettings() { try { await flushSave(); notice.value = t('settingsSaved') } catch { /* Show the error from flushSave. */ } }
+async function saveSettings() { settingsBusy.value=true;try { await flushSave(); notice.value = t('settingsSaved') } catch { /* Show the error from flushSave. */ } finally {settingsBusy.value=false} }
 async function changeCover(file: File | null) {
   if (coverBusy.value) return
   coverBusy.value = true; saveStatus.value = 'saving'
@@ -192,8 +207,10 @@ function formatDate(timestamp: number) {
         </nav>
       </aside>
       <main :class="['workbench-main',{editing:selectedTrain}]">
+        <div v-if="openingEntry" class="workspace-loading-overlay"><LoadingProgress :label="waitingLabel" /></div>
         <div v-if="error" class="work-error">{{ error }}<button @click="data ? saveSettings() : load()">{{ t('retry') }}</button></div>
         <div v-if="data?.recovered" class="recovery-banner">{{ t('recoveredProject') }}</div>
+        <div v-if="loading" class="workspace-loading"><LoadingProgress :label="t('loadingProject')" /></div>
         <template v-if="!loading && data">
           <template v-if="section === 'overview'">
             <div class="workspace-heading"><div><h1>{{ t('projectOverview') }}</h1><p>{{ t('overviewSubtitle') }}</p></div><button class="new-train" @click="startCreate('train')"><Plus :size="22" />{{ t('newTrain') }}</button></div>
@@ -208,16 +225,16 @@ function formatDate(timestamp: number) {
           </template>
           <template v-else>
             <div class="workspace-heading"><div><h1>{{ selectedTrain?.name || sectionTitle }}</h1><p>{{ selectedTrain ? (selectedTrain.kind === 'rail' ? t('railEditorHint') : t('trainEditorHint')) : section === 'rails' ? t('railTypeHint') : section === 'trains' ? t('trainTypeHint') : section === 'all' ? t('contentTypesHint') : section === 'assets' ? t('assetsHint') : section === 'settings' ? t('projectSettingsHint') : t('plannedHint') }}</p></div><button v-if="section === 'trains' || section === 'rails' || section === 'all'" class="new-train" @click="startCreate(section === 'rails' ? 'rail' : 'train')"><Plus :size="22" />{{ section === 'rails' ? t('newRail') : t('newTrain') }}</button></div>
-            <template v-if="section === 'trains' || section === 'rails' || section === 'all'"><component :is="selectedTrain?.kind === 'rail' ? RailEditor : TrainEditor" v-if="selectedTrain" ref="trainEditor" :key="selectedTrain.id" :project-path="project.path" :entry="selectedTrain" @back="leaveTrain" @deleted="removedRail" @export="openExport" @ready="applyPendingIssue" @changed="updateEntry" @status="saveStatus=$event" @error="error=$event" /><template v-else><label class="content-search"><Search :size="18" /><input v-model="query" :placeholder="t('contentSearch')" /></label><div class="content-table list-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in visibleItems" :key="item.id" class="content-row" @click="openTrain(item)"><span class="item-name"><span class="item-icon"><component :is="item.kind === 'rail' ? TrainTrack : TrainFront" :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ item.kind === 'rail' ? t('rails') : t('trains') }}</small></span></span><span class="item-kind"><component :is="item.kind === 'rail' ? TrainTrack : TrainFront" :size="16" />{{ item.kind === 'rail' ? t('rails') : t('trains') }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!visibleItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ section === 'trains' ? t('noTrains') : t('noContent') }}</strong><span>{{ section === 'rails' ? t('railEmpty') : section === 'trains' ? t('noTrainsHint') : t('noContentHint') }}</span></div></div></template></template>
-            <form v-else-if="section === 'settings'" class="settings-panel" @submit.prevent="saveSettings"><section class="cover-settings"><div class="cover-preview"><ProjectArtwork :path="project.path" :revision="coverRevision" /></div><div><h3>{{ t('projectCover') }}</h3><p>{{ t('projectCoverHint') }}</p><div class="cover-actions"><button type="button" :disabled="coverBusy" @click="coverInput?.click()"><Upload :size="15" />{{ t('uploadCover') }}</button><button type="button" :disabled="coverBusy" @click="changeCover(null)">{{ t('removeCover') }}</button></div><input ref="coverInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="coverSelected" /></div></section><label>{{ t('namespace') }}<input v-model="settingsNamespace" pattern="[a-z0-9_.-]+" required /><small>{{ t('namespaceHint') }}</small></label><label>{{ t('description') }}<textarea v-model="settingsDescription" rows="4" /></label><button class="new-train" type="submit">{{ t('saveSettings') }}</button></form>
-            <AssetLibrary v-else-if="section==='assets'" :project-path="project.path" @error="error=$event" />
+            <template v-if="section === 'trains' || section === 'rails' || section === 'all'"><Suspense v-if="selectedTrain"><component :is="selectedTrain.kind === 'rail' ? RailEditor : TrainEditor" ref="trainEditor" :key="selectedTrain.id" :project-path="project.path" :entry="selectedTrain" @back="leaveTrain" @deleted="removedRail" @export="openExport" @ready="applyPendingIssue" @changed="updateEntry" @status="saveStatus=$event" @error="error=$event" /><template #fallback><div class="workspace-loading"><LoadingProgress :label="t('openingEditor')" /></div></template></Suspense><template v-else><label class="content-search"><Search :size="18" /><input v-model="query" :placeholder="t('contentSearch')" /></label><div class="content-table list-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in visibleItems" :key="item.id" class="content-row" @click="openTrain(item)"><span class="item-name"><span class="item-icon"><component :is="item.kind === 'rail' ? TrainTrack : TrainFront" :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ item.kind === 'rail' ? t('rails') : t('trains') }}</small></span></span><span class="item-kind"><component :is="item.kind === 'rail' ? TrainTrack : TrainFront" :size="16" />{{ item.kind === 'rail' ? t('rails') : t('trains') }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!visibleItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ section === 'trains' ? t('noTrains') : t('noContent') }}</strong><span>{{ section === 'rails' ? t('railEmpty') : section === 'trains' ? t('noTrainsHint') : t('noContentHint') }}</span></div></div></template></template>
+            <form v-else-if="section === 'settings'" class="settings-panel" @submit.prevent="saveSettings"><section class="cover-settings"><div class="cover-preview"><ProjectArtwork :path="project.path" :revision="coverRevision" /></div><div><h3>{{ t('projectCover') }}</h3><p>{{ t('projectCoverHint') }}</p><div class="cover-actions"><button type="button" :disabled="coverBusy" @click="coverInput?.click()"><Upload :size="15" />{{ t('uploadCover') }}</button><button type="button" :disabled="coverBusy" @click="changeCover(null)">{{ t('removeCover') }}</button></div><input ref="coverInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="coverSelected" /></div></section><LoadingProgress v-if="coverBusy || settingsBusy" :label="t('saving')" /><label>{{ t('namespace') }}<input v-model="settingsNamespace" pattern="[a-z0-9_.-]+" required /><small>{{ t('namespaceHint') }}</small></label><label>{{ t('description') }}<textarea v-model="settingsDescription" rows="4" /></label><button class="new-train" type="submit" :disabled="settingsBusy">{{ t('saveSettings') }}</button></form>
+            <Suspense v-else-if="section==='assets'"><AssetLibrary :project-path="project.path" @error="error=$event" /><template #fallback><div class="workspace-loading"><LoadingProgress :label="t('loadingAssets')" /></div></template></Suspense>
             <div v-else class="placeholder-panel"><component :is="section === 'objects' ? TreePine : Monitor" :size="42" /><h2>{{ sectionTitle }}</h2><p>{{ t('plannedHint') }}</p></div>
           </template>
         </template>
       </main>
     </div>
-    <Transition name="studio-dialog"><div v-if="creating" class="work-modal-scrim" @click.self="creating = false"><form class="work-modal" @submit.prevent="submitTrain"><div><h2>{{ creatingKind === 'rail' ? t('newRail') : t('newTrain') }}</h2><button type="button" :aria-label="t('close')" @click="creating = false"><X :size="18" /></button></div><label>{{ creatingKind === 'rail' ? t('railName') : t('trainName') }}<input v-model="trainName" autofocus maxlength="80" :placeholder="creatingKind === 'rail' ? t('railNamePlaceholder') : t('trainNamePlaceholder')" /></label><footer><button type="button" @click="creating = false">{{ t('cancel') }}</button><button type="submit" :disabled="busy || !trainName.trim()">{{ creatingKind === 'rail' ? t('createRail') : t('createTrain') }}</button></footer></form></div></Transition>
-    <Transition name="studio-dialog"><div v-if="exportOpen" class="work-modal-scrim" @click.self="exportOpen = false"><form class="work-modal export-modal" @submit.prevent="submitExport"><div><h2>{{ t('exportPack') }}</h2><button type="button" :aria-label="t('close')" @click="exportOpen=false"><X :size="18" /></button></div><label>{{ t('exportTarget') }}<select v-model="exportOptions.target" @change="changeTarget"><option value="mtr4">MTR 4</option><option value="mtr3_nte">MTR 3 + NTE</option></select></label><label>{{ t('minecraftVersion') }}<select v-model="exportOptions.minecraftVersion"><option v-for="version in exportOptions.target === 'mtr4' ? ['1.20.4'] : mtr3Versions" :key="version">{{ version }}</option></select></label><label v-if="exportOptions.target==='mtr4'">{{ t('modelFormat') }}<select v-model="exportOptions.modelFormat"><option value="obj">OBJ</option><option value="mqo">MQO</option></select></label><label class="export-visibility"><input v-model="exportOptions.onlyVisible" type="checkbox" /><span>{{ t('onlyExportVisible') }}<small>{{ t('onlyExportVisibleHint') }}</small></span></label><div v-if="exportIssues.length" class="export-issues"><button v-for="(issue,index) in exportIssues" :key="index" type="button" :class="issue.severity" @click="openIssue(issue)"><AlertTriangle :size="15" /><span>{{ issue.message }}</span></button></div><footer><button type="button" @click="exportOpen=false">{{ t('cancel') }}</button><button type="submit" :disabled="exportBusy">{{ exportBusy ? t('validating') : t('continueExport') }}</button></footer></form></div></Transition>
+    <Transition name="studio-dialog"><div v-if="creating" class="work-modal-scrim" @click.self="creating = false"><form class="work-modal" @submit.prevent="submitTrain"><div><h2>{{ creatingKind === 'rail' ? t('newRail') : t('newTrain') }}</h2><button type="button" :aria-label="t('close')" @click="creating = false"><X :size="18" /></button></div><label>{{ creatingKind === 'rail' ? t('railName') : t('trainName') }}<input v-model="trainName" autofocus maxlength="80" :placeholder="creatingKind === 'rail' ? t('railNamePlaceholder') : t('trainNamePlaceholder')" /></label><LoadingProgress v-if="busy" :label="t('saving')" /><footer><button type="button" @click="creating = false">{{ t('cancel') }}</button><button type="submit" :disabled="busy || !trainName.trim()">{{ creatingKind === 'rail' ? t('createRail') : t('createTrain') }}</button></footer></form></div></Transition>
+    <Transition name="studio-dialog"><div v-if="exportOpen" class="work-modal-scrim" @click.self="exportOpen = false"><form class="work-modal export-modal" @submit.prevent="submitExport"><div><h2>{{ t('exportPack') }}</h2><button type="button" :aria-label="t('close')" @click="exportOpen=false"><X :size="18" /></button></div><label>{{ t('exportTarget') }}<select v-model="exportOptions.target" @change="changeTarget"><option value="mtr4">MTR 4</option><option value="mtr3_nte">MTR 3 + NTE</option></select></label><label>{{ t('minecraftVersion') }}<select v-model="exportOptions.minecraftVersion"><option v-for="version in exportOptions.target === 'mtr4' ? ['1.20.4'] : mtr3Versions" :key="version">{{ version }}</option></select></label><label v-if="exportOptions.target==='mtr4'">{{ t('modelFormat') }}<select v-model="exportOptions.modelFormat"><option value="obj">OBJ</option><option value="mqo">MQO</option></select></label><label class="export-visibility"><input v-model="exportOptions.onlyVisible" type="checkbox" /><span>{{ t('onlyExportVisible') }}<small>{{ t('onlyExportVisibleHint') }}</small></span></label><div v-if="exportIssues.length" class="export-issues"><button v-for="(issue,index) in exportIssues" :key="index" type="button" :class="issue.severity" @click="openIssue(issue)"><AlertTriangle :size="15" /><span>{{ issue.message }}</span></button></div><LoadingProgress v-if="exportBusy" :label="exportStage" /><footer><button type="button" @click="exportOpen=false">{{ t('cancel') }}</button><button type="submit" :disabled="exportBusy">{{ exportBusy ? exportStage : t('continueExport') }}</button></footer></form></div></Transition>
     <div v-if="notice" class="work-notice" role="status">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
   </div>
 </template>
@@ -238,6 +255,8 @@ function formatDate(timestamp: number) {
   font-size: 13px;
   -webkit-font-smoothing: antialiased;
 }
+.workspace-loading{min-height:320px;display:grid;place-items:center}
+.workspace-loading-overlay{position:absolute;z-index:12;inset:0;display:grid;place-items:center;background:#191b1fd9}
 .workbench button, .workbench input, .workbench select, .workbench textarea { font: inherit; }
 .workbench button { cursor: pointer; }
 .workbench button:disabled { opacity: .45; cursor: not-allowed; }
@@ -314,7 +333,7 @@ function formatDate(timestamp: number) {
 .nav-caption { margin: 22px 10px 7px; font-size: 10px; font-weight: 500; color: var(--workspace-quiet); }
 .work-nav-rule { height: 1px; background: var(--workspace-line); margin: 19px 10px 0; }
 .work-nav-rule + .nav-caption { margin-top: 16px; }
-.workbench-main { min-width: 0; flex: 1; overflow: auto; padding: 34px clamp(24px, 4vw, 56px) 48px; }
+.workbench-main { position:relative; min-width: 0; flex: 1; overflow: auto; padding: 34px clamp(24px, 4vw, 56px) 48px; }
 .workspace-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 30px; }
 .workspace-heading h1 { margin: 0; font: 600 28px/1.25 var(--studio-font, 'Inter', 'Segoe UI', sans-serif); letter-spacing: -.7px; }
 .workspace-heading p { margin: 9px 0 0; color: var(--workspace-muted); font-size: 12px; line-height: 1.6; }

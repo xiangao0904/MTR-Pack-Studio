@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event'
 import { t } from './i18n'
 import ProjectWorkspace from './components/ProjectWorkspace.vue'
 import ProjectArtwork from './components/ProjectArtwork.vue'
+import LoadingProgress from './components/LoadingProgress.vue'
 import { chooseProjectSavePath, closeProject, createProject, loadRecentProjects, openProject, removeRecentProject, saveProject, takePendingProjectPath, type ProjectSummary } from './lib/projects'
 
 function displayPath(path: string): string {
@@ -22,7 +23,8 @@ const query = ref('')
 const creating = ref(false)
 const projectName = ref('')
 const projectFile = ref('')
-const busy = ref(false)
+const busy = ref(true)
+const busyLabel = ref(t('loadingProject'))
 const notice = ref('')
 const menuFor = ref<string | null>(null)
 const activeProject = ref<ProjectSummary | null>(null)
@@ -37,7 +39,7 @@ let closing = false
 function keepListener(unlisten: () => void) { if (unmounted) unlisten(); else desktopListeners.push(unlisten) }
 onBeforeUnmount(() => { unmounted = true; desktopListeners.forEach(unlisten => unlisten()) })
 onMounted(async () => {
-  await refreshProjects()
+  try { await refreshProjects() } finally { busy.value=false }
   if (isDesktop) {
     keepListener(await listen('open-project-file', async () => {
       const path = await takePendingProjectPath()
@@ -56,7 +58,7 @@ onMounted(async () => {
 })
 async function refreshProjects() { try { projects.value = await loadRecentProjects() } catch (error) { showError(error) } }
 async function flushWorkspace() { if (workspace.value) await workspace.value.flush(); else await saveProject() }
-async function saveNow() { try { await flushWorkspace(); notice.value = t('projectSaved') } catch (error) { showError(error) } }
+async function saveNow() { busyLabel.value=t('saving');busy.value=true;try { await flushWorkspace(); notice.value = t('projectSaved') } catch (error) { showError(error) } finally {busy.value=false} }
 function showError(error: unknown) { notice.value = error instanceof Error ? error.message : String(error) }
 const isDesktop = '__TAURI_INTERNALS__' in window
 async function windowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
@@ -71,7 +73,7 @@ async function dragTitlebar(event: MouseEvent) {
   } catch (error) { showError(error) }
 }
 async function chooseProject() {
-  try { busy.value = true; if (activeProject.value) await flushWorkspace(); const project = await openProject(); if (project) { activeProject.value = project; await refreshProjects() } }
+  try { busyLabel.value=t('loadingProject');busy.value = true; if (activeProject.value) await flushWorkspace(); const project = await openProject(); if (project) { activeProject.value = project; await refreshProjects() } }
   catch (error) { showError(error) } finally { busy.value = false }
 }
 async function chooseProjectFile() {
@@ -81,7 +83,7 @@ async function chooseProjectFile() {
 async function submitProject() {
   if (!projectName.value.trim()) return
   try {
-    busy.value = true
+    busyLabel.value=t('saving');busy.value = true
     if (activeProject.value) await flushWorkspace()
     if (!projectFile.value.trim()) {
       const path = await chooseProjectSavePath(projectName.value.trim())
@@ -94,15 +96,20 @@ async function submitProject() {
   } catch (error) { showError(error) } finally { busy.value = false }
 }
 async function reopenProject(project: ProjectSummary) {
+  busyLabel.value=t('loadingProject');busy.value=true
   try { if (activeProject.value) await flushWorkspace(); activeProject.value = await openProject(project.path); await refreshProjects() } catch (error) { showError(error) }
+  finally {busy.value=false}
 }
 async function forgetProject(path: string) {
   try { await removeRecentProject(path); menuFor.value = null; await refreshProjects() } catch (error) { showError(error) }
 }
 async function returnHome() {
+  busyLabel.value=t('saving');busy.value=true
   try { await flushWorkspace(); await closeProject(); activeProject.value = null; await refreshProjects() } catch (error) { showError(error) }
+  finally {busy.value=false}
 }
 async function openExternalProject(path: string) {
+  busyLabel.value=t('loadingProject');busy.value=true
   try {
     if (activeProject.value?.path === path) return
     if (activeProject.value) await flushWorkspace()
@@ -110,6 +117,7 @@ async function openExternalProject(path: string) {
     if (project) activeProject.value = project
     await refreshProjects()
   } catch (error) { showError(error) }
+  finally {busy.value=false}
 }
 function dateLabel(timestamp: number) {
   const date = new Date(timestamp)
@@ -148,6 +156,11 @@ function dateLabel(timestamp: number) {
     <ProjectWorkspace v-else ref="workspace" :key="activeProject.path" :project="activeProject" @back="returnHome" @editor-context="editorContext=$event" />
     </Transition>
     <Transition name="studio-dialog"><div v-if="creating" class="modal-scrim" @click.self="creating = false"><form class="create-modal" @submit.prevent="submitProject"><div class="modal-head"><div><span class="eyebrow">{{ t('packEyebrow') }}</span><h2>{{ t('create') }}</h2></div><button type="button" class="close-button" @click="creating = false"><X :size="20" /></button></div><label>{{ t('name') }}<input v-model="projectName" autofocus maxlength="80" :placeholder="t('newPlaceholder')" /></label><label>{{ t('projectFile') }}<span class="folder-field"><input v-model="projectFile" :placeholder="t('projectFileHint')" /><button type="button" @click="chooseProjectFile">{{ t('browse') }}</button></span></label><p>{{ t('projectFileHelp') }}</p><div class="modal-actions"><button type="button" class="cancel-button" @click="creating = false">{{ t('cancel') }}</button><button class="create-button" type="submit" :disabled="busy || !projectName.trim()">{{ t('create') }}</button></div></form></div></Transition>
+    <div v-if="busy" class="global-progress"><LoadingProgress :label="busyLabel" /></div>
     <div v-if="notice" class="toast" role="alert">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
   </div>
 </template>
+<style scoped>
+.global-progress{position:fixed;z-index:2000;inset:0;display:grid;place-items:center;background:#171b1fe8}
+.global-progress :deep(.loading-progress){padding:20px;border:1px solid #ffffff24;border-radius:8px;background:#252a30;box-shadow:0 16px 40px #0007}
+</style>

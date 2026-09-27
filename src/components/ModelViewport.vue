@@ -20,7 +20,7 @@ export interface PreviewTransform { translation: [number, number, number]; rotat
 export interface PreviewLayer { transform?: PreviewTransform; partTransforms?: Record<string, PreviewTransform>; renderStage?: RenderStage; partRenderStages?: Record<string,RenderStage>; key: string; assetId: string; layerId: string; carriageId: string; visible: boolean; z: number; reversed: boolean; bogieOffset: number; flipV: boolean; legacyUvCorrection?: boolean; hiddenParts: string[]; bindings: MaterialBinding[] }
 export interface PreviewGuide { key: string; length: number; width: number; z: number; reversed: boolean }
 const props = withDefaults(defineProps<{ assets: PreviewLayer[]; guides: PreviewGuide[]; selectedPart?: string; selectedLayer?: string; groundHeight?: number; previewRail?: RailDefinition; builtInRailId?: BuiltInRailId; showRails?: boolean; showGrid?: boolean; wireframe?: boolean; vehicleLightsOn?: boolean; thumbnailCarriageId?: string; thumbnailModelSignature?: string; thumbnailSavedSignature?: string; renderMode?: PreviewRenderMode; settings?: ViewportSettings; cameraView?: 'perspective' | 'front' | 'back' | 'left' | 'right' | 'top'; selectedInstanceKey?: string }>(), { builtInRailId: '', showRails: false, showGrid: true, wireframe: false, vehicleLightsOn: true, renderMode: 'studio' })
-const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, signature: string, bytes: Uint8Array] }>()
+const emit = defineEmits<{ select: [selection: { partId: string; layerId: string; carriageId: string; instanceKey?: string }]; clearSelection: []; error: [message: string]; thumbnail: [carriageId: string, signature: string, bytes: Uint8Array]; progress: [completed: number, total: number]; ready: [] }>()
 const host = ref<HTMLDivElement>()
 const modeTransitionKey = ref(0)
 const orientationAxes = ref([{name:'X',color:'#ed777c',x:28,y:0},{name:'Y',color:'#87dca3',x:0,y:-28},{name:'Z',color:'#80b6f1',x:-20,y:18}])
@@ -155,11 +155,13 @@ function disposeObject(root: THREE.Object3D) {
 async function rebuild() {
   if (!scene) return
   const version = ++generation
+  emit('progress',0,props.assets.length)
   const signature = contentSignature()
   const cached = contentCache.get(signature)
   const group = cached ?? new THREE.Group()
   let complete = true
   if (!cached) try {
+    let completed=0
     const results = await Promise.allSettled(props.assets.map(async asset => {
       const previewBindings=textureBindings(asset.bindings)
       const cacheKey = JSON.stringify([asset.assetId, previewBindings])
@@ -217,7 +219,7 @@ async function rebuild() {
       coordinateFrame.scale.x = -1
       coordinateFrame.add(model)
       offset.add(coordinateFrame); instance.add(offset); group.add(instance)
-    }))
+    }).map(task=>task.finally(()=>{if(version===generation)emit('progress',++completed,props.assets.length)})))
     const failure = results.find(result => result.status === 'rejected')
     if (failure?.status === 'rejected') throw failure.reason
   } catch (cause) { complete = false; if (version === generation) emit('error', cause instanceof Error ? cause.message : String(cause)) }
@@ -249,6 +251,7 @@ async function rebuild() {
     hasFramedContent = true
   }
   if (complete) observeThumbnail()
+  emit('ready')
 }
 async function loadProjectRail(rail: RailDefinition) {
   const root = new THREE.Group()
@@ -580,7 +583,7 @@ function click(event: MouseEvent) {
 onMounted(()=>{
   if(!host.value)return
   scene=new THREE.Scene();scene.add(previewRoot);scene.background=new THREE.Color(0x191b1f);camera=new THREE.PerspectiveCamera(45,1,.01,10000);camera.position.set(8,4,12)
-  try { renderer=new THREE.WebGLRenderer({antialias:true}) } catch(cause) { emit('error',String(cause)); return }
+  try { renderer=new THREE.WebGLRenderer({antialias:true}) } catch(cause) { emit('error',String(cause));emit('ready'); return }
   renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.BasicShadowMap;renderer.shadowMap.autoUpdate=false;host.value.append(renderer.domElement)
   pipeline=new PreviewRenderer(renderer,scene,camera)
   changeCamera()
