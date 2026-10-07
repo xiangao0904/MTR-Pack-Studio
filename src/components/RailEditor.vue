@@ -70,8 +70,8 @@ function importModel(useDefault: boolean) { perform(async()=>{
   const path=useDefault ? null : await chooseModelFile(); if(!useDefault&&!path)return
   const overrides: Record<string,string>={}
   if(path) {
-    const analysis=await analyzeModelImport(path)
-    for(const dependency of analysis.missingDependencies){const chosen=await chooseModelDependency(dependency);if(!chosen)return;overrides[dependency]=chosen}
+    let analysis=await analyzeModelImport(path,overrides)
+    while(analysis.missingDependencies.length){for(const missing of analysis.missingDependencies){const name=missing.split(/[\\/]/).pop()||missing;const chosen=await chooseModelDependency(name);if(!chosen)return;overrides[name]=chosen}analysis=await analyzeModelImport(path,overrides)}
   }
   emit('status','saving')
   const result=await importRailModel(props.projectPath,rail.value.id,path,overrides,rail.value.revision)
