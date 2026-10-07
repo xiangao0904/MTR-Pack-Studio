@@ -343,6 +343,58 @@ fn eye_candy_round_trips_with_revision_checks_references_and_atomic_failures() {
 }
 
 #[test]
+fn eye_candy_replaces_one_model_and_rejects_multi_model_updates_atomically() {
+    let root = std::env::temp_dir().join(format!("mtr-eye-candy-replace-{}", Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("props.mtrpack");
+    let mut container = Container::create(&path, "Props").unwrap();
+    let entry = create_eye_candy_into(&mut container, "Bench", "bench").unwrap();
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/studio-train");
+    let first = import_eye_candy_model_into(&mut container, &entry.id, &fixtures.join("body.obj"), &BTreeMap::new(), 1).unwrap();
+    let mut edited = first.eye_candy;
+    edited.models[0].transform = domain::ModelTransform { translation: [1.0, 2.0, 3.0], rotation: [0.0, 0.5, 0.0], scale: [2.0; 3] };
+    let edited = update_eye_candy_into(&mut container, edited, 2).unwrap();
+
+    let before = serde_json::to_vec(&container.index).unwrap();
+    let mut invalid = edited.clone();
+    invalid.models.push(invalid.models[0].clone());
+    assert!(update_eye_candy_into(&mut container, invalid, 3).unwrap_err().contains("only one model"));
+    assert_eq!(before, serde_json::to_vec(&container.index).unwrap());
+    let generation = container.index.generation;
+    container.index.generation = u64::MAX;
+    let before = serde_json::to_vec(&container.index).unwrap();
+    assert!(import_eye_candy_model_into(&mut container, &entry.id, &fixtures.join("bogie.obj"), &BTreeMap::new(), 3).is_err());
+    assert_eq!(before, serde_json::to_vec(&container.index).unwrap());
+    assert_eq!(read_eye_candy_document(&mut container, 0).unwrap(), edited);
+    container.index.generation = generation;
+
+    // Legacy files may still be read, but their next explicit import replaces all layers.
+    let mut legacy = edited.clone();
+    let mut extra = legacy.models[0].clone();
+    extra.id = Uuid::new_v4().to_string();
+    legacy.models.push(extra);
+    write_eye_candy_document(&mut container, 0, &legacy).unwrap();
+    container.commit().unwrap();
+    let replacement = import_eye_candy_model_into(&mut container, &entry.id, &fixtures.join("bogie.obj"), &BTreeMap::new(), 3).unwrap();
+    assert_eq!(replacement.eye_candy.models.len(), 1);
+    assert_eq!(replacement.eye_candy.revision, 4);
+    let layer = &replacement.eye_candy.models[0];
+    assert_eq!(layer.id, edited.models[0].id);
+    assert_eq!(layer.transform, edited.models[0].transform);
+    assert_eq!(layer.asset_id, replacement.asset.id);
+    assert_ne!(layer.asset_id, first.asset.id);
+    let catalog = asset_catalog(&mut container).unwrap();
+    assert!(catalog.models.iter().find(|asset| asset.id == first.asset.id).unwrap().references.is_empty());
+    assert_eq!(catalog.models.iter().find(|asset| asset.id == replacement.asset.id).unwrap().references.len(), 1);
+    container.compact().unwrap();
+    drop(container);
+    let mut reopened = Container::open(&path).unwrap();
+    assert_eq!(read_eye_candy_document(&mut reopened, 0).unwrap(), replacement.eye_candy);
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn blockbench_train_import_reopens_and_exports_with_eye_candy_in_both_targets() {
     let root=std::env::temp_dir().join(format!("bbmodel-workflow-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
     let path=root.join("acceptance.mtrpack");let mut container=Container::create(&path,"BBMODEL and Eye Candy Acceptance").unwrap();

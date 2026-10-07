@@ -1,7 +1,9 @@
 // Keep UI copy separate from components for future locale support.
 const en = {
   eyeCandy: 'Eye candy', newEyeCandy: 'New Eye Candy', createEyeCandy: 'Create Eye Candy', eyeCandyName: 'Eye candy name', eyeCandyNamePlaceholder: 'Station bench',
-  eyeCandyEditorHint: 'Edit station props and environmental objects. One unit equals one metre.', eyeCandyModels: 'Object models',
+  eyeCandyEditorHint: 'Edit station props and environmental objects. One unit equals one metre.', eyeCandyModels: 'Object models', eyeCandyModel: 'Object model',
+  eyeCandySingleModel: 'Eye candy can use only one model. Import or choose a replacement model.',
+  eyeCandyLegacyModels: 'This object contains multiple models from an earlier version. Import or choose one replacement model to continue editing.',
   deleteEyeCandy: 'Delete eye candy', confirmDeleteEyeCandy: 'Delete this eye candy from the project?',
   eyeCandyMissing: 'The eye candy could not be found.', eyeCandyConflict: 'This eye candy changed since it was opened. Reload it before saving again.',
   eyeCandyInvalid: 'Enter a name, a valid export ID, a six-digit color and valid transforms with positive scales.',

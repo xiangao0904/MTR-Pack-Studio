@@ -434,6 +434,7 @@ export async function getEyeCandy(path: string, eyeCandyId: string): Promise<Eye
   return JSON.parse(value)
 }
 export async function updateEyeCandy(path: string, eyeCandy: EyeCandyDefinition, expectedRevision: number): Promise<EyeCandyDefinition> {
+  if (eyeCandy.models.length > 1) throw new Error(t('eyeCandySingleModel'))
   if (inTauri()) return invoke('update_eye_candy', { eyeCandy, expectedRevision })
   if (!eyeCandy.name.trim() || !/^[a-z0-9_.-]{1,80}$/.test(eyeCandy.exportId) || !/^[a-fA-F0-9]{6}$/.test(eyeCandy.color)) throw new Error(t('eyeCandyInvalid'))
   for (const layer of eyeCandy.models) {

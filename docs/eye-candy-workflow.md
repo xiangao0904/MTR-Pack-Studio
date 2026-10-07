@@ -2,9 +2,16 @@
 
 Eye candy is editable project content for static station props and environmental
 objects. Create an entry from **Eye candy → New Eye Candy**, open it, and import
-an OBJ, FBX, MQO or BBMODEL model, or choose a model from the Asset Library. Objects may
-contain multiple layers. Layers can be renamed, reordered, duplicated, hidden or
-removed. The model tree supports picking and hiding individual parts.
+an OBJ, FBX, MQO or BBMODEL model, or choose a model from the Asset Library. Each
+object uses one model. Importing or choosing another model replaces it, retaining
+placement and compatible material/part edits. The model tree supports picking
+and hiding individual parts. The editor has no model ordering, duplication,
+model deletion or object deletion buttons.
+
+Older multi-model documents remain readable and exportable. The editor displays
+a notice and requires one replacement model before further editing; opening an
+old project never silently discards its models. Replacement retains the first
+model's placement and keeps the previous assets available in the Asset Library.
 
 The inspector edits the name, export ID, description and MTR 4 selector color.
 Position uses metres, rotation uses degrees in the UI (radians in storage), and
@@ -43,8 +50,11 @@ Upstream contracts are pinned to the same versions as the train exporter:
 
 ## Verification
 
-Rust tests cover eye-candy-only packs in all three export variants, multiple
-layers/materials, transforms, UV handling, deterministic archives, visibility,
+Rust tests cover single-model replacement, legacy multi-model replacement,
+rejection of multi-model updates, retained placement and references after
+reopening, and failed replacement rollback. Export tests cover eye-candy-only
+packs in all three export variants, legacy multiple layers/materials,
+transforms, UV handling, deterministic archives, visibility,
 error locations, untouched export destinations on failure, revision conflicts,
 failed-import/commit rollback, resource references, compaction, reopening and
 deletion. Existing train and rail contracts also run.

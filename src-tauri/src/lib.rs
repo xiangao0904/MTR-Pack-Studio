@@ -364,6 +364,7 @@ fn get_eye_candy(state: State<AppState>, eye_candy_id: String) -> Result<EyeCand
 }
 
 fn update_eye_candy_into(container: &mut Container, mut eye_candy: EyeCandyDefinition, expected_revision: u64) -> Result<EyeCandyDefinition, String> {
+    if eye_candy.models.len() > 1 { return Err("Eye candy can use only one model. Import or choose a replacement model.".into()); }
     eye_candy.name = validate_project_name(&eye_candy.name)?.to_string(); eye_candy.export_id = validate_resource_id(&eye_candy.export_id)?.to_string();
     if eye_candy.color.len() != 6 || !eye_candy.color.chars().all(|c| c.is_ascii_hexdigit()) { return Err("Eye candy color must contain six hexadecimal digits.".into()); }
     let index = eye_candy_entry_index(container, &eye_candy.id)?;
@@ -413,6 +414,18 @@ fn delete_eye_candy(state: State<AppState>, eye_candy_id: String) -> Result<(), 
 #[serde(rename_all = "camelCase")]
 struct EyeCandyImportResult { eye_candy: EyeCandyDefinition, asset: AssetDefinition }
 
+fn replacement_eye_candy_model(container: &mut Container, asset: &AssetDefinition, previous: Option<&ModelLayer>) -> Result<ModelLayer, String> {
+    let Some(previous) = previous else { return Ok(new_model_layer(asset)); };
+    let document: model::ModelDocument = rmp_serde::from_slice(&container.read_blob(&asset.document_hash)?).map_err(|e|e.to_string())?;
+    let mut layer = previous.clone();
+    layer.asset_id = asset.id.clone(); layer.name = asset.name.clone(); layer.part_rules.clear();
+    layer.material_bindings.retain(|binding|document.materials.iter().any(|material|material.id==binding.material_id));
+    layer.hidden_parts.retain(|id|asset.parts.iter().any(|part|&part.id==id));
+    layer.part_transforms.retain(|id,_|asset.parts.iter().any(|part|&part.id==id));
+    layer.part_render_stages.retain(|id,_|asset.parts.iter().any(|part|&part.id==id));
+    Ok(layer)
+}
+
 fn import_eye_candy_model_into(container: &mut Container, eye_candy_id: &str, path: &Path, dependency_overrides: &std::collections::BTreeMap<String, String>, expected_revision: u64) -> Result<EyeCandyImportResult, String> {
     let index = eye_candy_entry_index(container, eye_candy_id)?;
     let mut eye_candy = read_eye_candy_document(container, index)?;
@@ -421,7 +434,7 @@ fn import_eye_candy_model_into(container: &mut Container, eye_candy_id: &str, pa
     let previous = container.index.clone();
     let result = (|| {
         let asset = import_model_asset_into(container, path, dependency_overrides)?;
-        eye_candy.models.push(new_model_layer(&asset));
+        eye_candy.models = vec![replacement_eye_candy_model(container, &asset, eye_candy.models.first())?];
         write_eye_candy_document(container, index, &eye_candy)?; container.commit()?;
         Ok(EyeCandyImportResult { eye_candy, asset })
     })();
