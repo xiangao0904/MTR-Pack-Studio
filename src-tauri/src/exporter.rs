@@ -1,6 +1,6 @@
 use crate::{
     container::Container,
-    domain::{AssetDefinition, ModelLayer, ModelTransform, RailDefinition, TrainDefinition},
+    domain::{AssetDefinition, ModelLayer, ModelTransform, EyeCandyDefinition, RailDefinition, TrainDefinition},
     model::{ModelDocument, ModelMaterial, ModelPart},
 };
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,7 @@ pub struct ValidationIssue {
     pub message: String,
     pub train_id: Option<String>,
     pub rail_id: Option<String>,
+    pub eye_candy_id: Option<String>,
     pub carriage_id: Option<String>,
     pub layer_id: Option<String>,
     pub field: Option<String>,
@@ -92,6 +93,7 @@ pub fn validate(
 ) -> Result<Vec<ValidationIssue>, String> {
     let trains = load_trains(container)?;
     let rails = load_rails(container)?;
+    let eye_candies = load_eye_candies(container)?;
     let mut issues = Vec::new();
     let mut ids = BTreeSet::new();
     if !valid_id(&container.index.namespace) {
@@ -134,11 +136,11 @@ pub fn validate(
             Some("modelFormat"),
         );
     }
-    if trains.is_empty() && rails.is_empty() {
+    if trains.is_empty() && rails.is_empty() && eye_candies.is_empty() {
         issue(
             &mut issues,
             "error",
-            "Create at least one train or rail before exporting.",
+            "Create at least one train, rail, or eye candy before exporting.",
             None,
             None,
             None,
@@ -438,6 +440,7 @@ pub fn validate(
                         message,
                         train_id: Some(train.id.clone()),
                         rail_id: None,
+                        eye_candy_id: None,
                         carriage_id: Some(carriage.id.clone()),
                         layer_id: Some(layer.id.clone()),
                         field: Some(field),
@@ -447,6 +450,7 @@ pub fn validate(
         }
     }
     validate_rails(container, &rails, options, &mut issues);
+    validate_eye_candies(container, &eye_candies, options, &mut issues);
     Ok(issues)
 }
 
@@ -487,6 +491,7 @@ pub fn export(
         )?;
     }
     build_rails(container, options, &mut files)?;
+    build_eye_candies(container, options, &mut files)?;
     write_zip(path, &files)?;
     Ok(ExportReport {
         path: path.to_string_lossy().into_owned(),
@@ -739,6 +744,84 @@ fn build_mtr3(
     Ok(())
 }
 
+pub fn load_eye_candies(container: &mut Container) -> Result<Vec<EyeCandyDefinition>, String> {
+    let entries: Vec<_> = container.index.content.iter().filter(|e| e.kind == "eye_candy").cloned().collect();
+    entries.into_iter().map(|entry| {
+        let hash = entry.resources.first().ok_or_else(|| format!("Eye candy {} has no document.", entry.name))?;
+        serde_json::from_slice(&container.read_blob(hash)?).map_err(|e| format!("Invalid eye candy {}: {e}", entry.name))
+    }).collect()
+}
+
+fn validate_eye_candies(container: &mut Container, eye_candies: &[EyeCandyDefinition], options: &ExportOptions, issues: &mut Vec<ValidationIssue>) {
+    let mut ids = BTreeSet::new();
+    for eye_candy in eye_candies {
+        let mut report = |layer: Option<&ModelLayer>, field: &str, message: String| {
+            issues.push(ValidationIssue {severity: "error".into(), message, train_id: None, rail_id: None, eye_candy_id: Some(eye_candy.id.clone()), carriage_id: None, layer_id: layer.map(|l| l.id.clone()), field: Some(field.into())});
+        };
+        if !valid_id(&eye_candy.export_id) || !ids.insert(eye_candy.export_id.clone()) {
+            report(None, "exportId", "Eye candy export IDs must be valid and unique.".into());
+        }
+        if eye_candy.name.trim().is_empty() { report(None, "name", "Eye candy needs a display name.".into()); }
+        if eye_candy.color.len() != 6 || !eye_candy.color.chars().all(|c| c.is_ascii_hexdigit()) { report(None, "color", "Eye candy color must contain six hexadecimal digits.".into()); }
+        let mut geometry = false;
+        for layer in eye_candy.models.iter().filter(|l| !options.only_visible || l.visible) {
+            let result = (|| -> Result<(), String> {
+                let (asset, mut doc) = load_asset(container, &layer.asset_id)?;
+                for binding in &layer.material_bindings {
+                    binding.properties.validate()?;
+                    if !doc.materials.iter().any(|m| m.id == binding.material_id) { return Err(format!("Unknown material binding: {}", binding.material_id)); }
+                }
+                apply_layer_edits(&mut doc, layer, options.only_visible)?;
+                geometry |= !doc.parts.is_empty();
+                for part in &doc.parts {
+                    if part.positions.is_empty() || part.indices.is_empty() || part.indices.len() % 3 != 0
+                        || part.indices.iter().any(|i| *i as usize >= part.positions.len())
+                        || (!part.normals.is_empty() && part.normals.len() != part.positions.len())
+                        || (!part.texcoords.is_empty() && part.texcoords.len() != part.positions.len())
+                        || part.positions.iter().flatten().chain(part.normals.iter().flatten()).chain(part.texcoords.iter().flatten()).any(|v| !v.is_finite()) {
+                        return Err(format!("Part {} contains invalid mesh data.", part.name));
+                    }
+                    if part.material.is_some_and(|i| i >= doc.materials.len()) { return Err("Eye candy part references a missing material.".into()); }
+                }
+                for material in &doc.materials {
+                    if material.color.iter().any(|v| !v.is_finite()) { return Err("Eye candy material has an invalid color.".into()); }
+                    texture_bytes(container, &asset, Some(material), layer)?;
+                }
+                if !layer.part_rules.is_empty() { return Err("Train placement rules cannot be applied to eye candy models.".into()); }
+                Ok(())
+            })();
+            if let Err(error) = result { report(Some(layer), "models", error); }
+        }
+        if !geometry { report(None, "models", "Eye candy has no exportable geometry. Import a model or make a layer visible.".into()); }
+    }
+}
+
+fn build_eye_candies(container: &mut Container, options: &ExportOptions, files: &mut BTreeMap<String, Vec<u8>>) -> Result<(), String> {
+    let eye_candies = load_eye_candies(container)?;
+    if eye_candies.is_empty() { return Ok(()); }
+    let namespace = container.index.namespace.clone();
+    let mut objects = Vec::new();
+    let mut nte = serde_json::Map::new();
+    for eye_candy in eye_candies {
+        let base = format!("models/eye_candy/{}", eye_candy.export_id);
+        let (format, textures) = write_static_model(container, &eye_candy.models, &namespace, &base, options, files)?;
+        if options.target == "mtr4" {
+            objects.push(json!({"id":format!("{namespace}:{}",eye_candy.export_id),"name":eye_candy.name,"color":eye_candy.color,"modelResource":format!("{namespace}:{base}.{format}"),"textureResource":format!("{namespace}:models/eye_candy/{}",textures.first().ok_or("Eye candy has no texture")?),"flipTextureV":false,"translation":{"x":0,"y":0,"z":0},"rotation":{"x":0,"y":0,"z":0},"scale":{"x":1,"y":1,"z":1},"mirror":{"x":false,"y":false,"z":false}}));
+        } else {
+            nte.insert(format!("{namespace}:{}",eye_candy.export_id),json!({"name":eye_candy.name,"model":format!("{namespace}:{base}.obj"),"flipV":false}));
+        }
+    }
+    if options.target == "mtr4" {
+        let path = format!("assets/{namespace}/mtr_custom_resources.json");
+        let mut resources: Value = serde_json::from_slice(files.get(&path).ok_or("Missing resource manifest")?).map_err(|e|e.to_string())?;
+        resources["objects"] = Value::Array(objects);
+        files.insert(path, pretty(&resources)?);
+    } else {
+        files.insert(format!("assets/mtrsteamloco/eyecandies/{namespace}.json"), pretty(&Value::Object(nte))?);
+    }
+    Ok(())
+}
+
 pub fn load_rails(container: &mut Container) -> Result<Vec<RailDefinition>, String> {
     let entries: Vec<_> = container.index.content.iter().filter(|e| e.kind == "rail").cloned().collect();
     entries.into_iter().map(|entry| {
@@ -751,7 +834,7 @@ fn validate_rails(container: &mut Container, rails: &[RailDefinition], options: 
     let mut ids = BTreeSet::new();
     for rail in rails {
         let mut report = |layer: Option<&ModelLayer>, field: &str, message: String| {
-            issues.push(ValidationIssue {severity: "error".into(), message, train_id: None, rail_id: Some(rail.id.clone()), carriage_id: None, layer_id: layer.map(|l| l.id.clone()), field: Some(field.into())});
+            issues.push(ValidationIssue {severity: "error".into(), message, train_id: None, rail_id: Some(rail.id.clone()), eye_candy_id: None, carriage_id: None, layer_id: layer.map(|l| l.id.clone()), field: Some(field.into())});
         };
         if !valid_id(&rail.export_id) || !ids.insert(rail.export_id.clone()) {
             report(None, "exportId", "Rail export IDs must be valid and unique.".into());
@@ -799,42 +882,7 @@ fn build_rails(container: &mut Container, options: &ExportOptions, files: &mut B
     let mut nte = serde_json::Map::new();
     for rail in rails {
         let base = format!("models/rail/{}", rail.export_id);
-        let mut combined = ModelDocument { parts: vec![], materials: vec![], warnings: vec![], uv_origin_top_left: false };
-        let mut textures = Vec::new();
-        for layer in rail.models.iter().filter(|l| !options.only_visible || l.visible) {
-            let (asset, mut doc) = load_asset(container, &layer.asset_id)?;
-            apply_layer_edits(&mut doc, layer, options.only_visible)?;
-            name_parts(&mut doc, &layer.id);
-            if doc.parts.iter().any(|p| p.material.is_none()) {
-                let index = doc.materials.len();
-                doc.materials.push(ModelMaterial { id: "__default".into(), name: "Default".into(), color: [1.0;4], texture: None, properties: Default::default() });
-                for part in &mut doc.parts { if part.material.is_none() { part.material = Some(index); } }
-            }
-            let offset = combined.materials.len();
-            for material in &doc.materials {
-                let bytes = texture_bytes(container, &asset, Some(material), layer)?;
-                let texture_name = format!("{}.png", blake3::hash(&bytes).to_hex());
-                files.insert(format!("assets/{namespace}/models/rail/{texture_name}"), bytes);
-                textures.push(texture_name);
-            }
-            let flip = doc.flip_v(layer.flip_texture_v);
-            for part in &mut doc.parts {
-                part.material = part.material.map(|i| i + offset);
-                if flip { for uv in &mut part.texcoords { uv[1] = 1.0 - uv[1]; } }
-            }
-            combined.parts.extend(doc.parts);
-            combined.materials.extend(doc.materials);
-        }
-        let format = if options.target == "mtr4" && options.model_format == "mqo" { "mqo" } else { "obj" };
-        let model = if format == "mqo" {
-            let mut mqo = write_mqo(&combined);
-            for texture in &textures { mqo = mqo.replacen("tex(\"default.png\")", &format!("tex(\"{texture}\")"), 1); }
-            mqo
-        } else {
-            files.insert(format!("assets/{namespace}/{base}.mtl"), write_mtl(&combined, &textures).into_bytes());
-            write_obj(&combined, &format!("{}.mtl", rail.export_id))
-        };
-        files.insert(format!("assets/{namespace}/{base}.{format}"), model.into_bytes());
+        let (format, textures) = write_static_model(container, &rail.models, &namespace, &base, options, files)?;
         if options.target == "mtr4" {
             entries.push(json!({"id":format!("{namespace}:{}",rail.export_id),"name":rail.name,"color":"777777","modelResource":format!("{namespace}:{base}.{format}"),"textureResource":format!("{namespace}:models/rail/{}",textures[0]),"flipTextureV":false,"repeatInterval":rail.repeat_interval,"modelYOffset":0}));
         } else {
@@ -851,6 +899,48 @@ fn build_rails(container: &mut Container, options: &ExportOptions, files: &mut B
         files.insert(format!("assets/mtrsteamloco/rails/{namespace}.json"), pretty(&Value::Object(nte))?);
     }
     Ok(())
+}
+
+// Static resources share texture, UV, visibility and transform semantics.
+fn write_static_model(container: &mut Container, layers: &[ModelLayer], namespace: &str, base: &str, options: &ExportOptions, files: &mut BTreeMap<String, Vec<u8>>) -> Result<(String, Vec<String>), String> {
+    let directory = base.rsplit_once('/').ok_or("Invalid static model path")?.0;
+    let mut combined = ModelDocument { parts: vec![], materials: vec![], warnings: vec![], uv_origin_top_left: false };
+    let mut textures = Vec::new();
+    for layer in layers.iter().filter(|l| !options.only_visible || l.visible) {
+        let (asset, mut doc) = load_asset(container, &layer.asset_id)?;
+        apply_layer_edits(&mut doc, layer, options.only_visible)?;
+        name_parts(&mut doc, &layer.id);
+        if doc.parts.iter().any(|p| p.material.is_none()) {
+            let index = doc.materials.len();
+            doc.materials.push(ModelMaterial { id: "__default".into(), name: "Default".into(), color: [1.0;4], texture: None, properties: Default::default() });
+            for part in &mut doc.parts { if part.material.is_none() { part.material = Some(index); } }
+        }
+        let offset = combined.materials.len();
+        for material in &doc.materials {
+            let bytes = texture_bytes(container, &asset, Some(material), layer)?;
+            let texture_name = format!("{}.png", blake3::hash(&bytes).to_hex());
+            files.insert(format!("assets/{namespace}/{directory}/{texture_name}"), bytes);
+            textures.push(texture_name);
+        }
+        let flip = doc.flip_v(layer.flip_texture_v);
+        for part in &mut doc.parts {
+            part.material = part.material.map(|i| i + offset);
+            if flip { for uv in &mut part.texcoords { uv[1] = 1.0 - uv[1]; } }
+        }
+        combined.parts.extend(doc.parts);
+        combined.materials.extend(doc.materials);
+    }
+    let format = if options.target == "mtr4" && options.model_format == "mqo" { "mqo" } else { "obj" };
+    let model = if format == "mqo" {
+        let mut mqo = write_mqo(&combined);
+        for texture in &textures { mqo = mqo.replacen("tex(\"default.png\")", &format!("tex(\"{texture}\")"), 1); }
+        mqo
+    } else {
+        files.insert(format!("assets/{namespace}/{base}.mtl"), write_mtl(&combined, &textures).into_bytes());
+        write_obj(&combined, &format!("{}.mtl", base.rsplit('/').next().unwrap()))
+    };
+    files.insert(format!("assets/{namespace}/{base}.{format}"), model.into_bytes());
+    Ok((format.into(), textures))
 }
 
 fn export_base(train: &str, carriage: &str) -> String {
@@ -1258,6 +1348,7 @@ fn issue(
         message: message.into(),
         train_id: train_id.map(Into::into),
         rail_id: None,
+                        eye_candy_id: None,
         carriage_id: carriage_id.map(Into::into),
         layer_id: None,
         field: field.map(Into::into),
@@ -1341,6 +1432,65 @@ mod tests {
         let hash = fixture.container.put_blob(&serde_json::to_vec(rail).unwrap(), "application/json").unwrap();
         fixture.container.index.content = vec![ContentEntry { id: rail.id.clone(), kind: "rail".into(), name: rail.name.clone(), file: "rail.json".into(), updated_at: 0, resources: vec![hash] }];
         fixture.container.commit().unwrap();
+    }
+    fn save_eye_candy(fixture: &mut Fixture, value: &EyeCandyDefinition) {
+        let hash = fixture.container.put_blob(&serde_json::to_vec(value).unwrap(), "application/json").unwrap();
+        fixture.container.index.content = vec![ContentEntry { id:value.id.clone(), kind:"eye_candy".into(), name:value.name.clone(), file:"eye_candy.json".into(), updated_at:0, resources:vec![hash] }];
+        fixture.container.commit().unwrap();
+    }
+    #[test]
+    fn eye_candy_exports_alone_with_multiple_layers_textures_and_transforms() {
+        let mut fixture = Fixture::new();
+        let mut value = EyeCandyDefinition::new("Station bench", "bench");
+        value.models = fixture.train.carriages[0].body_models.clone();
+        value.models[0].part_rules.clear();
+        value.models[0].transform.translation = [2.0, 3.0, 4.0];
+        let mut second = value.models[0].clone(); second.id = "second".into(); second.transform.translation[1] = 6.0; value.models.push(second);
+        save_eye_candy(&mut fixture, &value);
+        for opt in [options("mtr4", "obj"), options("mtr4", "mqo"), options("mtr3_nte", "obj")] {
+            assert!(validate(&mut fixture.container, &opt).unwrap().is_empty());
+            let output = fixture.root.join("eye-candy.zip");
+            export(&mut fixture.container, &output, &opt).unwrap();
+            let bytes = fs::read(&output).unwrap(); export(&mut fixture.container, &output, &opt).unwrap(); assert_eq!(bytes,fs::read(&output).unwrap());
+            let files = unzip(&output); let ns = &fixture.container.index.namespace;
+            assert_eq!(files.keys().filter(|p|p.contains("models/eye_candy/") && p.ends_with(".png")).count(),2);
+            let path = format!("assets/{ns}/models/eye_candy/bench.{}",opt.model_format);
+            let source = std::str::from_utf8(&files[&path]).unwrap(); assert!(!source.contains("default.png"));
+            if opt.target == "mtr4" {
+                let manifest = read_json(&files, &format!("assets/{ns}/mtr_custom_resources.json"));
+                check_schema(&manifest, "customResources.json"); check_schema(&manifest["objects"][0], "objectResource.json");
+                assert_eq!(manifest["objects"][0]["modelResource"],format!("{ns}:models/eye_candy/bench.{}",opt.model_format));
+                assert_eq!(manifest["vehicles"],json!([])); assert_eq!(manifest["objects"][0]["scale"],json!({"x":1,"y":1,"z":1}));
+            } else {
+                let manifest = read_json(&files,&format!("assets/mtrsteamloco/eyecandies/{ns}.json"));
+                assert_eq!(manifest[format!("{ns}:bench")]["model"],format!("{ns}:models/eye_candy/bench.obj"));
+            }
+            if opt.model_format == "obj" {
+                assert!(source.contains("v -2 3 4")); assert!(source.contains("v -2 6 4"));
+                assert_eq!(source.lines().filter(|line|line.starts_with("f ")).count(),4);
+            }
+        }
+        fixture.finish();
+    }
+    #[test]
+    fn eye_candy_visibility_validation_and_failed_exports_preserve_destination() {
+        let mut fixture = Fixture::new(); let mut value = EyeCandyDefinition::new("Bench", "bench");
+        value.models = fixture.train.carriages[0].body_models.clone(); value.models[0].part_rules.clear();
+        value.models[0].hidden_parts.push("p2".into());
+        let mut hidden = value.models[0].clone(); hidden.id="hidden".into(); hidden.visible=false; hidden.asset_id="missing".into(); value.models.push(hidden);
+        save_eye_candy(&mut fixture,&value);
+        for opt in [options("mtr4","obj"),options("mtr4","mqo"),options("mtr3_nte","obj")] {
+            let visible = ExportOptions {only_visible:true,..opt}; let output = fixture.root.join("visible-eye.zip");
+            export(&mut fixture.container,&output,&visible).unwrap();
+            let before = fs::read(&output).unwrap();
+            let issues=validate(&mut fixture.container,&ExportOptions {only_visible:false,..visible.clone()}).unwrap();
+            assert!(issues.iter().any(|i|i.eye_candy_id.as_deref()==Some(&value.id)&&i.layer_id.as_deref()==Some("hidden")));
+            assert!(export(&mut fixture.container,&output,&ExportOptions {only_visible:false,..visible.clone()}).is_err()); assert_eq!(before,fs::read(&output).unwrap());
+            if visible.model_format=="obj" { let files=unzip(&output); let model=std::str::from_utf8(&files[&format!("assets/{}/models/eye_candy/bench.obj",fixture.container.index.namespace)]).unwrap(); assert_eq!(model.lines().filter(|l|l.starts_with("f ")).count(),1); }
+        }
+        value.export_id="../unsafe".into();value.color="oops".into();save_eye_candy(&mut fixture,&value);
+        let issues=validate(&mut fixture.container,&options("mtr4","obj")).unwrap();assert!(issues.iter().any(|i|i.field.as_deref()==Some("exportId")));assert!(issues.iter().any(|i|i.field.as_deref()==Some("color")));
+        fixture.finish();
     }
     #[test]
     fn rails_export_alone_in_both_targets_with_multiple_textures() {

@@ -314,3 +314,30 @@ fn default_rail_browser_fixture_has_material_metadata() {
     assert_eq!(materials.len(),glb["materials"].as_array().unwrap().len());
     assert!(materials.iter().any(|material|material.texture.is_some()));
 }
+
+#[test]
+fn eye_candy_round_trips_with_revision_checks_references_and_atomic_failures() {
+    let root=std::env::temp_dir().join(format!("mtr-eye-candy-{}",Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
+    let path=root.join("props.mtrpack");let mut container=Container::create(&path,"Props").unwrap();
+    let entry=create_eye_candy_into(&mut container,"Bench","bench").unwrap();
+    assert!(create_eye_candy_into(&mut container,"Other","bench").is_err());
+    assert!(create_eye_candy_into(&mut container,"BENCH","other").is_err());
+    let source=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/studio-train/body.obj");
+    let imported=import_eye_candy_model_into(&mut container,&entry.id,&source,&BTreeMap::new(),1).unwrap();
+    assert_eq!(imported.eye_candy.revision,2);assert!(!imported.asset.parts.is_empty());
+    assert_eq!(asset_catalog(&mut container).unwrap().models[0].references.len(),1);
+    let before=serde_json::to_vec(&container.index).unwrap();
+    assert!(import_eye_candy_model_into(&mut container,&entry.id,&source,&BTreeMap::new(),1).is_err());
+    assert!(import_eye_candy_model_into(&mut container,&entry.id,&root.join("missing.obj"),&BTreeMap::new(),2).is_err());assert_eq!(before,serde_json::to_vec(&container.index).unwrap());
+    let mut edited=imported.eye_candy.clone();edited.description="Station furniture".into();edited.models[0].transform.translation=[1.0,2.0,3.0];
+    let edited=update_eye_candy_into(&mut container,edited,2).unwrap();assert_eq!(edited.revision,3);
+    assert!(update_eye_candy_into(&mut container,edited.clone(),2).is_err());
+    let mut invalid=edited.clone();invalid.models[0].asset_id="missing".into();assert!(update_eye_candy_into(&mut container,invalid,3).is_err());
+    let generation=container.index.generation;container.index.generation=u64::MAX;
+    let before=serde_json::to_vec(&container.index).unwrap();assert!(update_eye_candy_into(&mut container,edited.clone(),3).is_err());assert_eq!(before,serde_json::to_vec(&container.index).unwrap());
+    assert!(delete_eye_candy_from(&mut container,&entry.id).is_err());assert_eq!(before,serde_json::to_vec(&container.index).unwrap());container.index.generation=generation;
+    container.compact().unwrap();drop(container);let mut reopened=Container::open(&path).unwrap();
+    assert_eq!(read_eye_candy_document(&mut reopened,0).unwrap(),edited);assert!(!asset_preview(&mut reopened,&imported.asset,&[]).unwrap().is_empty());
+    delete_eye_candy_from(&mut reopened,&entry.id).unwrap();assert!(reopened.index.content.is_empty());assert!(asset_catalog(&mut reopened).unwrap().models[0].references.is_empty());
+    drop(reopened);fs::remove_dir_all(root).unwrap();
+}

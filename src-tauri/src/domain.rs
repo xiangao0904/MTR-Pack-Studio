@@ -4,6 +4,24 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct EyeCandyDefinition {
+    pub id: String,
+    pub revision: u64,
+    pub export_id: String,
+    pub name: String,
+    #[serde(default)] pub description: String,
+    #[serde(default = "default_color")] pub color: String,
+    #[serde(default)] pub models: Vec<ModelLayer>,
+}
+
+impl EyeCandyDefinition {
+    pub fn new(name: &str, export_id: &str) -> Self {
+        Self { id: Uuid::new_v4().to_string(), revision: 1, export_id: export_id.into(), name: name.into(), description: String::new(), color: default_color(), models: Vec::new() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct RailDefinition {
     pub id: String,
     pub revision: u64,

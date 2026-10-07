@@ -1,5 +1,15 @@
 // Keep UI copy separate from components for future locale support.
 const en = {
+  eyeCandy: 'Eye candy', newEyeCandy: 'New Eye Candy', createEyeCandy: 'Create Eye Candy', eyeCandyName: 'Eye candy name', eyeCandyNamePlaceholder: 'Station bench',
+  eyeCandyEditorHint: 'Edit station props and environmental objects. One unit equals one metre.', eyeCandyModels: 'Object models',
+  deleteEyeCandy: 'Delete eye candy', confirmDeleteEyeCandy: 'Delete this eye candy from the project?',
+  eyeCandyMissing: 'The eye candy could not be found.', eyeCandyConflict: 'This eye candy changed since it was opened. Reload it before saving again.',
+  eyeCandyInvalid: 'Enter a name, a valid export ID, a six-digit color and valid transforms with positive scales.',
+  reloadEyeCandy: 'Reload saved eye candy', eyeCandyReloadHint: 'Discard unsaved changes and reload the saved eye candy?',
+  eyeCandyEmpty: 'Import a model or choose one from the Asset Library to start.', eyeCandyDuplicate: 'An eye candy with this name or export ID already exists.',
+  loadingEyeCandy: 'Loading eye candy…', noEyeCandy: 'No eye candy yet', eyeCandyTransformHint: 'Transforms affect the selected layer or part and are included in the export.',
+  axisX: 'X', axisY: 'Y', axisZ: 'Z', scaleRatio: 'Scale', selectedPart: 'Selected part', selectedLayer: 'Selected layer', eyeCandyColorHint: 'Color shown in the MTR 4 object selector.',
+
   previewRailModel: 'Track model', builtInRail: 'Standard track', builtInSleeperRail: 'Sleeper track', builtInSidingRail: 'Siding track', builtInTracks: 'Built-in tracks', projectTracks: 'Project tracks',
   sceneSettings: 'Scene settings', sceneDisplay: 'Display', sceneLighting: 'Lighting', sceneQuality: 'Quality', resizeScenePanel: 'Resize scene settings panel',
   desktopModelImport: 'Open the desktop app to import your own OBJ, FBX or MQO model.',

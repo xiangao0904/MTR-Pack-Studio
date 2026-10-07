@@ -7,7 +7,7 @@ mod exporter;
 mod workflow_tests;
 
 use container::{has_project_magic, is_project_path, Container, ContentEntry};
-use domain::{slugify, AssetDefinition, AssetDependency, MaterialBinding, ModelLayer, RailDefinition, TrainDefinition};
+use domain::{slugify, AssetDefinition, AssetDependency, MaterialBinding, ModelLayer, EyeCandyDefinition, RailDefinition, TrainDefinition};
 use model::ImportAnalysis;
 use exporter::{ExportOptions, ExportReport, ValidationIssue};
 use serde::{Deserialize, Serialize};
@@ -314,6 +314,123 @@ fn get_active_project(state: State<AppState>) -> Result<Option<ProjectData>, Str
     Ok(active
         .as_ref()
         .map(|session| project_data(&session.container)))
+}
+
+fn eye_candy_entry_index(container: &Container, id: &str) -> Result<usize, String> {
+    container.index.content.iter().position(|entry| entry.kind == "eye_candy" && entry.id == id).ok_or_else(|| "The selected eye candy no longer exists.".into())
+}
+
+fn read_eye_candy_document(container: &mut Container, index: usize) -> Result<EyeCandyDefinition, String> {
+    let hash = container.index.content.get(index).and_then(|entry| entry.resources.first()).cloned().ok_or("The eye candy document is missing.")?;
+    serde_json::from_slice(&container.read_blob(&hash)?).map_err(|error| format!("Invalid eye candy document: {error}"))
+}
+
+fn write_eye_candy_document(container: &mut Container, index: usize, eye_candy: &EyeCandyDefinition) -> Result<(), String> {
+    let hash = container.put_blob(&serde_json::to_vec(eye_candy).map_err(|e| e.to_string())?, "application/vnd.mtrpack.eye_candy+json")?;
+    let entry = container.index.content.get_mut(index).ok_or("The selected eye candy no longer exists.")?;
+    entry.name = eye_candy.name.clone(); entry.updated_at = now_ms() as u128; entry.resources = vec![hash];
+    Ok(())
+}
+
+fn create_eye_candy_into(container: &mut Container, name: &str, export_id: &str) -> Result<ContentEntry, String> {
+    let name = name.trim(); validate_project_name(name)?; let export_id = validate_resource_id(export_id)?;
+    if container.index.content.iter().any(|entry| entry.kind == "eye_candy" && entry.name.eq_ignore_ascii_case(name)) { return Err("An eye candy with this name already exists.".into()); }
+    for existing in exporter::load_eye_candies(container)? {
+        if existing.export_id == export_id { return Err("An eye candy with this export ID already exists.".into()); }
+    }
+    let eye_candy = EyeCandyDefinition::new(name, export_id);
+    let previous = container.index.clone();
+    let result = (|| {
+        let index = container.index.content.len();
+        container.index.content.push(ContentEntry { id: eye_candy.id.clone(), kind: "eye_candy".into(), name: eye_candy.name.clone(), file: format!("content/eye_candy/{}.json", eye_candy.id), updated_at: now_ms() as u128, resources: Vec::new() });
+        write_eye_candy_document(container, index, &eye_candy)?; container.commit()?;
+        Ok(container.index.content[index].clone())
+    })();
+    if result.is_err() { container.index = previous; } result
+}
+
+#[tauri::command]
+fn create_eye_candy(state: State<AppState>, name: String, export_id: String) -> Result<ContentEntry, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    create_eye_candy_into(&mut active.as_mut().ok_or("No project is open.")?.container, &name, &export_id)
+}
+
+#[tauri::command]
+fn get_eye_candy(state: State<AppState>, eye_candy_id: String) -> Result<EyeCandyDefinition, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let container = &mut active.as_mut().ok_or("No project is open.")?.container;
+    let index = eye_candy_entry_index(container, &eye_candy_id)?; read_eye_candy_document(container, index)
+}
+
+fn update_eye_candy_into(container: &mut Container, mut eye_candy: EyeCandyDefinition, expected_revision: u64) -> Result<EyeCandyDefinition, String> {
+    eye_candy.name = validate_project_name(&eye_candy.name)?.to_string(); eye_candy.export_id = validate_resource_id(&eye_candy.export_id)?.to_string();
+    if eye_candy.color.len() != 6 || !eye_candy.color.chars().all(|c| c.is_ascii_hexdigit()) { return Err("Eye candy color must contain six hexadecimal digits.".into()); }
+    let index = eye_candy_entry_index(container, &eye_candy.id)?;
+    if read_eye_candy_document(container, index)?.revision != expected_revision { return Err("This eye candy changed since it was opened. Reload it before saving again.".into()); }
+    if container.index.content.iter().enumerate().any(|(position, entry)| position != index && entry.kind == "eye_candy" && entry.name.eq_ignore_ascii_case(&eye_candy.name)) { return Err("An eye candy with this name already exists.".into()); }
+    for existing in exporter::load_eye_candies(container)? {
+        if existing.id != eye_candy.id && existing.export_id == eye_candy.export_id { return Err("An eye candy with this export ID already exists.".into()); }
+    }
+    for layer in &eye_candy.models {
+        if !layer.part_rules.is_empty() { return Err("Train placement rules cannot be applied to eye candy models.".into()); }
+        layer.transform.validate()?;
+        if !container.index.assets.contains_key(&layer.asset_id) { return Err("A model referenced by this eye candy is missing from the Asset Library.".into()); }
+        for transform in layer.part_transforms.values() { transform.validate()?; }
+        for binding in &layer.material_bindings {
+            binding.properties.validate()?;
+            for hash in binding.texture_asset_id.iter().chain(binding.properties.maps.values()) {
+                let bytes = container.read_blob(hash)?;
+                image::load_from_memory(&bytes).map_err(|_| "An eye candy material references an invalid texture.")?;
+            }
+        }
+    }
+    eye_candy.revision = expected_revision.checked_add(1).ok_or("Eye candy revision overflow.")?;
+    let previous = container.index.clone();
+    let result = (|| { write_eye_candy_document(container, index, &eye_candy)?; container.commit()?; Ok(eye_candy) })();
+    if result.is_err() { container.index = previous; } result
+}
+
+#[tauri::command]
+fn update_eye_candy(state: State<AppState>, eye_candy: EyeCandyDefinition, expected_revision: u64) -> Result<EyeCandyDefinition, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    update_eye_candy_into(&mut active.as_mut().ok_or("No project is open.")?.container, eye_candy, expected_revision)
+}
+
+fn delete_eye_candy_from(container: &mut Container, eye_candy_id: &str) -> Result<(), String> {
+    let index = eye_candy_entry_index(container, eye_candy_id)?;
+    let previous = container.index.clone(); container.index.content.remove(index);
+    if let Err(error) = container.commit() { container.index = previous; return Err(error); } Ok(())
+}
+
+#[tauri::command]
+fn delete_eye_candy(state: State<AppState>, eye_candy_id: String) -> Result<(), String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    delete_eye_candy_from(&mut active.as_mut().ok_or("No project is open.")?.container, &eye_candy_id)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EyeCandyImportResult { eye_candy: EyeCandyDefinition, asset: AssetDefinition }
+
+fn import_eye_candy_model_into(container: &mut Container, eye_candy_id: &str, path: &Path, dependency_overrides: &std::collections::BTreeMap<String, String>, expected_revision: u64) -> Result<EyeCandyImportResult, String> {
+    let index = eye_candy_entry_index(container, eye_candy_id)?;
+    let mut eye_candy = read_eye_candy_document(container, index)?;
+    if eye_candy.revision != expected_revision { return Err("This eye candy changed during import. Retry the import.".into()); }
+    eye_candy.revision = expected_revision.checked_add(1).ok_or("Eye candy revision overflow.")?;
+    let previous = container.index.clone();
+    let result = (|| {
+        let asset = import_model_asset_into(container, path, dependency_overrides)?;
+        eye_candy.models.push(new_model_layer(&asset));
+        write_eye_candy_document(container, index, &eye_candy)?; container.commit()?;
+        Ok(EyeCandyImportResult { eye_candy, asset })
+    })();
+    if result.is_err() { container.index = previous; } result
+}
+
+#[tauri::command(async)]
+fn import_eye_candy_model(state: State<AppState>, eye_candy_id: String, path: String, dependency_overrides: std::collections::BTreeMap<String, String>, expected_revision: u64) -> Result<EyeCandyImportResult, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    import_eye_candy_model_into(&mut active.as_mut().ok_or("No project is open.")?.container, &eye_candy_id, Path::new(&path), &dependency_overrides, expected_revision)
 }
 
 fn rail_entry_index(container: &Container, id: &str) -> Result<usize, String> {
@@ -649,6 +766,16 @@ fn asset_catalog(container: &mut Container) -> Result<AssetCatalog, String> {
     let mut model_refs: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     let mut texture_refs: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     for index in 0..container.index.content.len() {
+        if container.index.content[index].kind == "eye_candy" {
+            let eye_candy = read_eye_candy_document(container, index)?;
+            for layer in &eye_candy.models {
+                let label = format!("{} / {}", eye_candy.name, layer.name);
+                model_refs.entry(layer.asset_id.clone()).or_default().push(label.clone());
+                for binding in &layer.material_bindings {
+                    for hash in binding.texture_asset_id.iter().chain(binding.properties.maps.values()) { texture_refs.entry(hash.clone()).or_default().push(label.clone()); }
+                }
+            }
+        }
         if container.index.content[index].kind == "rail" {
             let rail = read_rail_document(container, index)?;
             for layer in &rail.models {
@@ -765,13 +892,13 @@ fn delete_asset(state: State<AppState>, kind: String, id: String) -> Result<(), 
         match kind.as_str() {
             "model" => {
                 let item = catalog.models.iter().find(|item| item.id == id).ok_or("The selected model asset no longer exists.")?;
-                if !item.references.is_empty() { return Err("Remove this model from every train and rail before deleting it.".into()); }
+                if !item.references.is_empty() { return Err("Remove this model from every train, rail, and eye candy before deleting it.".into()); }
                 session.container.index.assets.remove(&id);
                 session.container.index.asset_thumbnail_hashes.remove(&id);
             }
             "texture" => {
                 let item = catalog.textures.iter().find(|item| item.hash == id).ok_or("The selected texture no longer exists.")?;
-                if !item.references.is_empty() { return Err("Remove this texture from every model, train, and rail before deleting it.".into()); }
+                if !item.references.is_empty() { return Err("Remove this texture from every model, train, rail, and eye candy before deleting it.".into()); }
                 session.container.index.texture_names.remove(&id);
             }
             _ => return Err("Choose a valid asset type.".into()),
@@ -1022,6 +1149,7 @@ pub fn run() {
             create_project,
             open_project,
             get_active_project,
+            create_eye_candy, get_eye_candy, update_eye_candy, delete_eye_candy, import_eye_candy_model,
             create_rail, get_rail, update_rail, delete_rail, import_rail_model, import_default_rail_model,
             create_train,
             get_train,

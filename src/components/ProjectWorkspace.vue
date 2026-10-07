@@ -4,11 +4,12 @@ import { AlertTriangle, ArrowRight, Box, Database, Home, Monitor, MoreHorizontal
 import { t } from '../i18n'
 import ProjectArtwork from './ProjectArtwork.vue'
 import LoadingProgress from './LoadingProgress.vue'
+const EyeCandyEditor = defineAsyncComponent(() => import('./EyeCandyEditor.vue'))
 const RailEditor = defineAsyncComponent(() => import('./RailEditor.vue'))
 const loadTrainEditor = () => import('./TrainEditor.vue')
 const TrainEditor = defineAsyncComponent(loadTrainEditor)
 const AssetLibrary = defineAsyncComponent(() => import('./AssetLibrary.vue'))
-import { chooseExportPath, createRail, createTrain, exportResourcePack, getProject, saveProject, setProjectCover, updateProjectSettings, validateExport, type ContentEntry, type ExportOptions, type ProjectData, type ProjectSummary, type ValidationIssue } from '../lib/projects'
+import { chooseExportPath, createEyeCandy, createRail, createTrain, exportResourcePack, getProject, saveProject, setProjectCover, updateProjectSettings, validateExport, type ContentEntry, type ExportOptions, type ProjectData, type ProjectSummary, type ValidationIssue } from '../lib/projects'
 
 const props = defineProps<{ project: ProjectSummary }>()
 const emit = defineEmits<{ back: []; editorContext: [context: {name:string;status:'saving'|'saved'|'failed'}] }>()
@@ -21,9 +22,14 @@ const waitingLabel = ref(t('openingEditor'))
 const error = ref('')
 const query = ref('')
 const creating = ref(false)
-const creatingKind = ref<'train'|'rail'>('train')
-function startCreate(kind: 'train'|'rail') { creatingKind.value=kind; creating.value=true }
-async function removedRail() { selectedTrain.value=null; section.value='rails'; await load() }
+const creatingKind = ref<'train'|'rail'|'eye_candy'>('train')
+function startCreate(kind: 'train'|'rail'|'eye_candy') { creatingKind.value=kind; creating.value=true }
+async function removedEntry() { const next = contentSection(selectedTrain.value?.kind || 'train'); selectedTrain.value=null; section.value=next; await load() }
+function contentSection(kind: string): Section { return kind === 'eye_candy' ? 'objects' : kind === 'rail' ? 'rails' : 'trains' }
+function contentLabel(kind: string) { return kind === 'eye_candy' ? t('decorativeObjects') : kind === 'rail' ? t('rails') : t('trains') }
+function contentIcon(kind: string) { return kind === 'eye_candy' ? TreePine : kind === 'rail' ? TrainTrack : TrainFront }
+const creationLabel = computed(() => creatingKind.value === 'eye_candy' ? t('newEyeCandy') : creatingKind.value === 'rail' ? t('newRail') : t('newTrain'))
+const creationAction = computed(() => creatingKind.value === 'eye_candy' ? t('createEyeCandy') : creatingKind.value === 'rail' ? t('createRail') : t('createTrain'))
 const trainName = ref('')
 const busy = ref(false)
 const settingsBusy = ref(false)
@@ -50,7 +56,7 @@ const exportOptions = ref<ExportOptions>(JSON.parse(localStorage.getItem('mtr-pa
 const mtr3Versions = ['1.16.5', '1.17.1', '1.18.2', '1.19.2', '1.19.3', '1.19.4', '1.20.1']
 
 const allItems = computed(() => [...(data.value?.content || [])].sort((a, b) => b.updatedAt - a.updatedAt))
-const visibleItems = computed(() => allItems.value.filter(item => (section.value !== 'trains' || item.kind === 'train') && (section.value !== 'rails' || item.kind === 'rail') && item.name.toLowerCase().includes(query.value.toLowerCase())))
+const visibleItems = computed(() => allItems.value.filter(item => (section.value !== 'trains' || item.kind === 'train') && (section.value !== 'rails' || item.kind === 'rail') && (section.value !== 'objects' || item.kind === 'eye_candy') && item.name.toLowerCase().includes(query.value.toLowerCase())))
 const recentItems = computed(() => allItems.value.slice(0, 4))
 const sectionTitle = computed(() => ({ all: t('allContentHeading'), trains: t('trainsHeading'), rails: t('rails'), objects: t('decorativeObjects'), pids: t('pids'), assets: t('assetLibrary'), settings: t('projectSettings') } as Partial<Record<Section, string>>)[section.value] || '')
 
@@ -84,12 +90,12 @@ async function navigate(next: Section) {
   try { await flushSave(); selectedTrain.value = null; section.value = next } catch { /* The current editor stays open so the user can retry. */ }
   finally {openingEntry.value=false}
 }
-async function leaveTrain() { await navigate(selectedTrain.value?.kind === 'rail' ? 'rails' : 'trains') }
+async function leaveTrain() { await navigate(contentSection(selectedTrain.value?.kind || 'train')) }
 async function openTrain(entry: ContentEntry) {
   if(openingEntry.value)return
-  if(!hasPendingEdits()){selectedTrain.value=entry;section.value=entry.kind==='rail'?'rails':'trains';return}
+  if(!hasPendingEdits()){selectedTrain.value=entry;section.value=contentSection(entry.kind);return}
   waitingLabel.value=t('saving');openingEntry.value=true
-  try { await flushSave(); selectedTrain.value = entry; section.value = entry.kind === 'rail' ? 'rails' : 'trains' } catch { /* Keep unsaved edits visible. */ }
+  try { await flushSave(); selectedTrain.value = entry; section.value = contentSection(entry.kind) } catch { /* Keep unsaved edits visible. */ }
   finally { openingEntry.value=false }
 }
 function updateEntry(entry: ContentEntry) {
@@ -111,13 +117,13 @@ async function submitExport() {
 }
 async function openIssue(issue: ValidationIssue) {
   if (!data.value) return
-  if (!issue.trainId && !issue.railId) { exportOpen.value = false; await navigate('settings'); return }
-  const entry = data.value.content.find(item => item.id === (issue.railId || issue.trainId))
+  if (!issue.trainId && !issue.railId && !issue.eyeCandyId) { exportOpen.value = false; await navigate('settings'); return }
+  const entry = data.value.content.find(item => item.id === (issue.eyeCandyId || issue.railId || issue.trainId))
   if (!entry) return
   try {
     await flushSave(); pendingIssue.value = issue; exportOpen.value = false
     if (selectedTrain.value?.id === entry.id && trainEditor.value) await applyPendingIssue()
-    else { selectedTrain.value = entry; section.value = entry.kind === 'rail' ? 'rails' : 'trains' }
+    else { selectedTrain.value = entry; section.value = contentSection(entry.kind) }
   } catch { /* Retain the current document when saving fails. */ }
 }
 async function applyPendingIssue() {
@@ -168,10 +174,10 @@ async function submitTrain() {
   saveStatus.value = 'saving'
   try {
     await flushSave()
-    await (creatingKind.value === 'rail' ? createRail : createTrain)(props.project.path, trainName.value.trim())
+    await (creatingKind.value === 'eye_candy' ? createEyeCandy : creatingKind.value === 'rail' ? createRail : createTrain)(props.project.path, trainName.value.trim())
     creating.value = false
     trainName.value = ''
-    section.value = creatingKind.value === 'rail' ? 'rails' : 'trains'
+    section.value = contentSection(creatingKind.value)
     await load()
     saveStatus.value = 'saved'
   } catch (cause) { saveStatus.value = 'failed'; error.value = cause instanceof Error ? cause.message : String(cause) }
@@ -199,7 +205,7 @@ function formatDate(timestamp: number) {
           <button :class="['work-nav', { active: section === 'all' }]" @click="navigate('all')"><Box :size="19" />{{ t('allContent') }}</button>
           <button :class="['work-nav', { active: section === 'trains' }]" @click="navigate('trains')"><TrainFront :size="19" />{{ t('trains') }}</button>
           <button :class="['work-nav', { active: section === 'rails' }]" @click="navigate('rails')"><TrainTrack :size="19" />{{ t('rails') }}</button>
-          <button :class="['work-nav', { active: section === 'objects' }]" @click="navigate('objects')"><TreePine :size="19" />{{ t('decorativeObjects') }}<small>{{ t('planned') }}</small></button>
+          <button :class="['work-nav', { active: section === 'objects' }]" @click="navigate('objects')"><TreePine :size="19" />{{ t('decorativeObjects') }}</button>
           <button :class="['work-nav', { active: section === 'pids' }]" @click="navigate('pids')"><Monitor :size="19" />{{ t('pids') }}<small>{{ t('planned') }}</small></button>
           <div class="work-nav-rule"></div><span class="nav-caption">{{ t('projectGroup') }}</span>
           <button :class="['work-nav', { active: section === 'assets' }]" @click="navigate('assets')"><Database :size="19" />{{ t('assetLibrary') }}</button>
@@ -218,22 +224,22 @@ function formatDate(timestamp: number) {
             <section class="content-types"><h2>{{ t('contentTypes') }}</h2><p>{{ t('contentTypesHint') }}</p><div class="type-cards">
               <button class="type-card" @click="navigate('trains')"><TrainFront :size="30" /><span><strong>{{ t('trains') }}</strong><small>{{ t('trainTypeHint') }}</small></span><ArrowRight :size="18" /></button>
               <button class="type-card" @click="navigate('rails')"><TrainTrack :size="30" /><span><strong>{{ t('rails') }}</strong><small>{{ t('railTypeHint') }}</small></span><ArrowRight :size="18" /></button>
-              <button class="type-card planned-card" @click="navigate('objects')"><TreePine :size="30" /><span><strong>{{ t('decorativeObjects') }}</strong><small>{{ t('objectTypeHint') }}</small></span><em>{{ t('planned') }}</em></button>
+              <button class="type-card" @click="navigate('objects')"><TreePine :size="30" /><span><strong>{{ t('decorativeObjects') }}</strong><small>{{ t('objectTypeHint') }}</small></span><ArrowRight :size="18" /></button>
               <button class="type-card planned-card" @click="navigate('pids')"><Monitor :size="30" /><span><strong>{{ t('pids') }}</strong><small>{{ t('pidsTypeHint') }}</small></span><em>{{ t('planned') }}</em></button>
             </div></section>
-            <section class="recent-content"><div class="recent-heading"><div><h2>{{ t('recentlyEdited') }}</h2><p>{{ t('recentlyEditedHint') }}</p></div><button @click="navigate('all')">{{ t('viewAll') }}<ArrowRight :size="16" /></button></div><div class="content-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in recentItems" :key="item.id" class="content-row" @click="openTrain(item)"><span class="item-name"><span class="item-icon"><component :is="item.kind === 'rail' ? TrainTrack : TrainFront" :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ item.kind === 'rail' ? t('rails') : t('trains') }}</small></span></span><span class="item-kind"><component :is="item.kind === 'rail' ? TrainTrack : TrainFront" :size="16" />{{ item.kind === 'rail' ? t('rails') : t('trains') }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!recentItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ t('noContent') }}</strong><span>{{ t('noContentHint') }}</span></div></div></section>
+            <section class="recent-content"><div class="recent-heading"><div><h2>{{ t('recentlyEdited') }}</h2><p>{{ t('recentlyEditedHint') }}</p></div><button @click="navigate('all')">{{ t('viewAll') }}<ArrowRight :size="16" /></button></div><div class="content-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in recentItems" :key="item.id" class="content-row" @click="openTrain(item)"><span class="item-name"><span class="item-icon"><component :is="contentIcon(item.kind)" :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ contentLabel(item.kind) }}</small></span></span><span class="item-kind"><component :is="contentIcon(item.kind)" :size="16" />{{ contentLabel(item.kind) }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!recentItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ t('noContent') }}</strong><span>{{ t('noContentHint') }}</span></div></div></section>
           </template>
           <template v-else>
-            <div class="workspace-heading"><div><h1>{{ selectedTrain?.name || sectionTitle }}</h1><p>{{ selectedTrain ? (selectedTrain.kind === 'rail' ? t('railEditorHint') : t('trainEditorHint')) : section === 'rails' ? t('railTypeHint') : section === 'trains' ? t('trainTypeHint') : section === 'all' ? t('contentTypesHint') : section === 'assets' ? t('assetsHint') : section === 'settings' ? t('projectSettingsHint') : t('plannedHint') }}</p></div><button v-if="section === 'trains' || section === 'rails' || section === 'all'" class="new-train" @click="startCreate(section === 'rails' ? 'rail' : 'train')"><Plus :size="22" />{{ section === 'rails' ? t('newRail') : t('newTrain') }}</button></div>
-            <template v-if="section === 'trains' || section === 'rails' || section === 'all'"><Suspense v-if="selectedTrain"><component :is="selectedTrain.kind === 'rail' ? RailEditor : TrainEditor" ref="trainEditor" :key="selectedTrain.id" :project-path="project.path" :entry="selectedTrain" @back="leaveTrain" @deleted="removedRail" @export="openExport" @ready="applyPendingIssue" @changed="updateEntry" @status="saveStatus=$event" @error="error=$event" /><template #fallback><div class="workspace-loading"><LoadingProgress :label="t('openingEditor')" /></div></template></Suspense><template v-else><label class="content-search"><Search :size="18" /><input v-model="query" :placeholder="t('contentSearch')" /></label><div class="content-table list-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in visibleItems" :key="item.id" class="content-row" @click="openTrain(item)"><span class="item-name"><span class="item-icon"><component :is="item.kind === 'rail' ? TrainTrack : TrainFront" :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ item.kind === 'rail' ? t('rails') : t('trains') }}</small></span></span><span class="item-kind"><component :is="item.kind === 'rail' ? TrainTrack : TrainFront" :size="16" />{{ item.kind === 'rail' ? t('rails') : t('trains') }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!visibleItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ section === 'trains' ? t('noTrains') : t('noContent') }}</strong><span>{{ section === 'rails' ? t('railEmpty') : section === 'trains' ? t('noTrainsHint') : t('noContentHint') }}</span></div></div></template></template>
+            <div class="workspace-heading"><div><h1>{{ selectedTrain?.name || sectionTitle }}</h1><p>{{ selectedTrain ? (selectedTrain.kind === 'eye_candy' ? t('eyeCandyEditorHint') : selectedTrain.kind === 'rail' ? t('railEditorHint') : t('trainEditorHint')) : section === 'objects' ? t('objectTypeHint') : section === 'rails' ? t('railTypeHint') : section === 'trains' ? t('trainTypeHint') : section === 'all' ? t('contentTypesHint') : section === 'assets' ? t('assetsHint') : section === 'settings' ? t('projectSettingsHint') : t('plannedHint') }}</p></div><button v-if="section === 'trains' || section === 'rails' || section === 'objects' || section === 'all'" class="new-train" @click="startCreate(section === 'objects' ? 'eye_candy' : section === 'rails' ? 'rail' : 'train')"><Plus :size="22" />{{ section === 'objects' ? t('newEyeCandy') : section === 'rails' ? t('newRail') : t('newTrain') }}</button></div>
+            <template v-if="section === 'trains' || section === 'rails' || section === 'objects' || section === 'all'"><Suspense v-if="selectedTrain"><component :is="selectedTrain.kind === 'eye_candy' ? EyeCandyEditor : selectedTrain.kind === 'rail' ? RailEditor : TrainEditor" ref="trainEditor" :key="selectedTrain.id" :project-path="project.path" :entry="selectedTrain" @back="leaveTrain" @deleted="removedEntry" @export="openExport" @ready="applyPendingIssue" @changed="updateEntry" @status="saveStatus=$event" @error="error=$event" /><template #fallback><div class="workspace-loading"><LoadingProgress :label="t('openingEditor')" /></div></template></Suspense><template v-else><label class="content-search"><Search :size="18" /><input v-model="query" :placeholder="t('contentSearch')" /></label><div class="content-table list-table"><div class="content-table-head"><span>{{ t('itemName') }}</span><span>{{ t('itemType') }}</span><span>{{ t('itemLastEdited') }}</span></div><button v-for="item in visibleItems" :key="item.id" class="content-row" @click="openTrain(item)"><span class="item-name"><span class="item-icon"><component :is="contentIcon(item.kind)" :size="22" /></span><span><strong>{{ item.name }}</strong><small>{{ contentLabel(item.kind) }}</small></span></span><span class="item-kind"><component :is="contentIcon(item.kind)" :size="16" />{{ contentLabel(item.kind) }}</span><span>{{ formatDate(item.updatedAt) }}</span><MoreHorizontal :size="18" /></button><div v-if="!visibleItems.length" class="content-empty"><TrainFront :size="30" /><strong>{{ section === 'objects' ? t('noEyeCandy') : section === 'trains' ? t('noTrains') : t('noContent') }}</strong><span>{{ section === 'objects' ? t('eyeCandyEmpty') : section === 'rails' ? t('railEmpty') : section === 'trains' ? t('noTrainsHint') : t('noContentHint') }}</span></div></div></template></template>
             <form v-else-if="section === 'settings'" class="settings-panel" @submit.prevent="saveSettings"><section class="cover-settings"><div class="cover-preview"><ProjectArtwork :path="project.path" :revision="coverRevision" /></div><div><h3>{{ t('projectCover') }}</h3><p>{{ t('projectCoverHint') }}</p><div class="cover-actions"><button type="button" :disabled="coverBusy" @click="coverInput?.click()"><Upload :size="15" />{{ t('uploadCover') }}</button><button type="button" :disabled="coverBusy" @click="changeCover(null)">{{ t('removeCover') }}</button></div><input ref="coverInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="coverSelected" /></div></section><LoadingProgress v-if="coverBusy || settingsBusy" :label="t('saving')" /><label>{{ t('namespace') }}<input v-model="settingsNamespace" pattern="[a-z0-9_.-]+" required /><small>{{ t('namespaceHint') }}</small></label><label>{{ t('description') }}<textarea v-model="settingsDescription" rows="4" /></label><button class="new-train" type="submit" :disabled="settingsBusy">{{ t('saveSettings') }}</button></form>
             <Suspense v-else-if="section==='assets'"><AssetLibrary :project-path="project.path" @error="error=$event" /><template #fallback><div class="workspace-loading"><LoadingProgress :label="t('loadingAssets')" /></div></template></Suspense>
-            <div v-else class="placeholder-panel"><component :is="section === 'objects' ? TreePine : Monitor" :size="42" /><h2>{{ sectionTitle }}</h2><p>{{ t('plannedHint') }}</p></div>
+            <div v-else class="placeholder-panel"><Monitor :size="42" /><h2>{{ sectionTitle }}</h2><p>{{ t('plannedHint') }}</p></div>
           </template>
         </template>
       </main>
     </div>
-    <Transition name="studio-dialog"><div v-if="creating" class="work-modal-scrim" @click.self="creating = false"><form class="work-modal" @submit.prevent="submitTrain"><div><h2>{{ creatingKind === 'rail' ? t('newRail') : t('newTrain') }}</h2><button type="button" :aria-label="t('close')" @click="creating = false"><X :size="18" /></button></div><label>{{ creatingKind === 'rail' ? t('railName') : t('trainName') }}<input v-model="trainName" autofocus maxlength="80" :placeholder="creatingKind === 'rail' ? t('railNamePlaceholder') : t('trainNamePlaceholder')" /></label><LoadingProgress v-if="busy" :label="t('saving')" /><footer><button type="button" @click="creating = false">{{ t('cancel') }}</button><button type="submit" :disabled="busy || !trainName.trim()">{{ creatingKind === 'rail' ? t('createRail') : t('createTrain') }}</button></footer></form></div></Transition>
+    <Transition name="studio-dialog"><div v-if="creating" class="work-modal-scrim" @click.self="creating = false"><form class="work-modal" @submit.prevent="submitTrain"><div><h2>{{ creationLabel }}</h2><button type="button" :aria-label="t('close')" @click="creating = false"><X :size="18" /></button></div><label>{{ creatingKind === 'eye_candy' ? t('eyeCandyName') : creatingKind === 'rail' ? t('railName') : t('trainName') }}<input v-model="trainName" autofocus maxlength="80" :placeholder="creatingKind === 'eye_candy' ? t('eyeCandyNamePlaceholder') : creatingKind === 'rail' ? t('railNamePlaceholder') : t('trainNamePlaceholder')" /></label><LoadingProgress v-if="busy" :label="t('saving')" /><footer><button type="button" @click="creating = false">{{ t('cancel') }}</button><button type="submit" :disabled="busy || !trainName.trim()">{{ creationAction }}</button></footer></form></div></Transition>
     <Transition name="studio-dialog"><div v-if="exportOpen" class="work-modal-scrim" @click.self="exportOpen = false"><form class="work-modal export-modal" @submit.prevent="submitExport"><div><h2>{{ t('exportPack') }}</h2><button type="button" :aria-label="t('close')" @click="exportOpen=false"><X :size="18" /></button></div><label>{{ t('exportTarget') }}<select v-model="exportOptions.target" @change="changeTarget"><option value="mtr4">MTR 4</option><option value="mtr3_nte">MTR 3 + NTE</option></select></label><label>{{ t('minecraftVersion') }}<select v-model="exportOptions.minecraftVersion"><option v-for="version in exportOptions.target === 'mtr4' ? ['1.20.4'] : mtr3Versions" :key="version">{{ version }}</option></select></label><label v-if="exportOptions.target==='mtr4'">{{ t('modelFormat') }}<select v-model="exportOptions.modelFormat"><option value="obj">OBJ</option><option value="mqo">MQO</option></select></label><label class="export-visibility"><input v-model="exportOptions.onlyVisible" type="checkbox" /><span>{{ t('onlyExportVisible') }}<small>{{ t('onlyExportVisibleHint') }}</small></span></label><div v-if="exportIssues.length" class="export-issues"><button v-for="(issue,index) in exportIssues" :key="index" type="button" :class="issue.severity" @click="openIssue(issue)"><AlertTriangle :size="15" /><span>{{ issue.message }}</span></button></div><LoadingProgress v-if="exportBusy" :label="exportStage" /><footer><button type="button" @click="exportOpen=false">{{ t('cancel') }}</button><button type="submit" :disabled="exportBusy">{{ exportBusy ? exportStage : t('continueExport') }}</button></footer></form></div></Transition>
     <div v-if="notice" class="work-notice" role="status">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
   </div>

@@ -19,6 +19,7 @@ export interface CarriageDefinition { thumbnailHash?: string; thumbnailModelSign
 export interface PreviewCarriage { carriageId: string; reversed: boolean }
 export interface TrainDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; tags: string[]; mtr3BaseTrainType: string; carriages: CarriageDefinition[]; previewConsist: PreviewCarriage[] }
 export interface RailDefinition { id: string; revision: number; exportId: string; name: string; description: string; repeatInterval: number; models: ModelLayer[] }
+export interface EyeCandyDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; models: ModelLayer[] }
 export type ModelFormat = 'obj' | 'fbx' | 'mqo'
 export interface ModelPartSummary { id: string; name: string; triangleCount: number }
 export interface ModelMaterial { id: string; name: string; color: [number, number, number, number]; texture?: string; properties?: MaterialProperties }
@@ -28,7 +29,7 @@ export interface TextureCatalogItem { hash: string; name: string; width: number;
 export interface AssetCatalog { models: ModelCatalogItem[]; textures: TextureCatalogItem[] }
 export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
 export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo'; onlyVisible?: boolean }
-export interface ValidationIssue { severity: 'error' | 'warning'; message: string; trainId?: string; railId?: string; carriageId?: string; layerId?: string | null; field?: string }
+export interface ValidationIssue { severity: 'error' | 'warning'; message: string; trainId?: string; railId?: string; eyeCandyId?: string; carriageId?: string; layerId?: string | null; field?: string }
 export interface ExportReport { path: string; fileCount: number; warnings: ValidationIssue[] }
 
 let browserActivePath = ''
@@ -183,12 +184,14 @@ export async function listAssets(path = browserActivePath): Promise<AssetCatalog
       for(const car of train.carriages)for(const layer of [...car.bodyModels,...car.bogie1Models,...car.bogie2Models])if(layer.assetId===id)references.push(`${train.name} / ${car.name} / ${layer.name}`)
     }
     for(const entry of project.content.filter(item=>item.kind==='rail')) { const rail=await getRail(path,entry.id); for(const layer of rail.models) if(layer.assetId===id) references.push(`${rail.name} / ${layer.name}`) }
+    for(const entry of project.content.filter(item=>item.kind==='eye_candy')) { const value=await getEyeCandy(path,entry.id); for(const layer of value.models) if(layer.assetId===id) references.push(`${value.name} / ${layer.name}`) }
     return {id,name:asset.name,sourceFormat:asset.sourceFormat,partCount:asset.parts.length,triangleCount:asset.parts.reduce((total,part)=>total+part.triangleCount,0),thumbnailHash:browserThumbnails(path)[id],references}
   }))
   const textures=browserTextures(path)
   const project=await getProject(path)
   for(const texture of textures){texture.references=[];for(const entry of project.content.filter(item=>item.kind==='train')){const train=await getTrain(path,entry.id);for(const car of train.carriages)for(const layer of [...car.bodyModels,...car.bogie1Models,...car.bogie2Models])for(const binding of layer.materialBindings)if(binding.textureAssetId===texture.hash||Object.values(binding.properties?.maps||{}).includes(texture.hash))texture.references.push(`${train.name} / ${car.name} / ${layer.name}`)}}
   for(const entry of project.content.filter(item=>item.kind==='rail')) { const rail=await getRail(path,entry.id); for(const texture of textures) for(const layer of rail.models) for(const binding of layer.materialBindings) if(binding.textureAssetId===texture.hash||Object.values(binding.properties?.maps||{}).includes(texture.hash)) texture.references.push(`${rail.name} / ${layer.name}`) }
+  for(const entry of project.content.filter(item=>item.kind==='eye_candy')) { const value=await getEyeCandy(path,entry.id); for(const texture of textures) for(const layer of value.models) for(const binding of layer.materialBindings) if(binding.textureAssetId===texture.hash||Object.values(binding.properties?.maps||{}).includes(texture.hash)) texture.references.push(`${value.name} / ${layer.name}`) }
   return {models,textures}
 }
 
@@ -396,4 +399,62 @@ export async function importRailModel(projectPath: string, railId: string, path:
   const rail = await getRail(projectPath, railId)
   rail.models.push({ id: crypto.randomUUID(), name: asset.name, assetId: asset.id, visible: true, flipTextureV: false, materialBindings: [], partRules: {} })
   return { rail: await updateRail(projectPath, rail, expectedRevision), asset }
+}
+
+export async function createEyeCandy(path: string, name: string): Promise<ContentEntry> {
+  const exportId = slug(name, 'eye_candy')
+  if (inTauri()) return invoke('create_eye_candy', { name, exportId })
+  const project = await getProject(path)
+  for (const entry of project.content.filter(item => item.kind === 'eye_candy')) {
+    const eyeCandy = await getEyeCandy(path, entry.id)
+    if (eyeCandy.name.toLowerCase() === name.toLowerCase() || eyeCandy.exportId === exportId) throw new Error(t('eyeCandyDuplicate'))
+  }
+  const eyeCandy: EyeCandyDefinition = { id: crypto.randomUUID(), revision: 1, name, exportId, description: '', color: 'FFFFFF', models: [] }
+  const entry: ContentEntry = { id: eyeCandy.id, kind: 'eye_candy', name, file: `content/eye_candy/${eyeCandy.id}.json`, updatedAt: Date.now() }
+  project.content.push(entry)
+  localStorage.setItem(`${dataKey(path)}:eyeCandy:${eyeCandy.id}`, JSON.stringify(eyeCandy))
+  localStorage.setItem(dataKey(path), JSON.stringify(project))
+  return entry
+}
+export async function getEyeCandy(path: string, eyeCandyId: string): Promise<EyeCandyDefinition> {
+  if (inTauri()) return invoke('get_eye_candy', { eyeCandyId })
+  const value = localStorage.getItem(`${dataKey(path)}:eyeCandy:${eyeCandyId}`)
+  if (!value) throw new Error(t('eyeCandyMissing'))
+  return JSON.parse(value)
+}
+export async function updateEyeCandy(path: string, eyeCandy: EyeCandyDefinition, expectedRevision: number): Promise<EyeCandyDefinition> {
+  if (inTauri()) return invoke('update_eye_candy', { eyeCandy, expectedRevision })
+  if (!eyeCandy.name.trim() || !/^[a-z0-9_.-]{1,80}$/.test(eyeCandy.exportId) || !/^[a-fA-F0-9]{6}$/.test(eyeCandy.color)) throw new Error(t('eyeCandyInvalid'))
+  for (const layer of eyeCandy.models) {
+    if (Object.keys(layer.partRules).length) throw new Error(t('eyeCandyInvalid'))
+    for (const transform of [layer.transform, ...Object.values(layer.partTransforms || {})]) {
+      if (transform && ([...transform.translation, ...transform.rotation, ...transform.scale].some(value => !Number.isFinite(value)) || transform.scale.some(value => value <= 0))) throw new Error(t('eyeCandyInvalid'))
+    }
+  }
+  const current = await getEyeCandy(path, eyeCandy.id)
+  if (current.revision !== expectedRevision) throw new Error(t('eyeCandyConflict'))
+  const project = await getProject(path)
+  for (const entry of project.content.filter(item => item.kind === 'eye_candy' && item.id !== eyeCandy.id)) {
+    const other = await getEyeCandy(path, entry.id)
+    if (other.name.toLowerCase() === eyeCandy.name.toLowerCase() || other.exportId === eyeCandy.exportId) throw new Error(t('eyeCandyDuplicate'))
+  }
+  const updated = { ...eyeCandy, revision: expectedRevision + 1 }
+  const entry = project.content.find(item => item.id === eyeCandy.id)
+  if (entry) { entry.name = updated.name; entry.updatedAt = Date.now() }
+  localStorage.setItem(`${dataKey(path)}:eyeCandy:${eyeCandy.id}`, JSON.stringify(updated))
+  localStorage.setItem(dataKey(path), JSON.stringify(project))
+  return updated
+}
+export async function deleteEyeCandy(path: string, eyeCandyId: string): Promise<void> {
+  if (inTauri()) return invoke('delete_eye_candy', { eyeCandyId })
+  const project = await getProject(path)
+  project.content = project.content.filter(item => item.id !== eyeCandyId)
+  localStorage.setItem(dataKey(path), JSON.stringify(project))
+  localStorage.removeItem(`${dataKey(path)}:eyeCandy:${eyeCandyId}`)
+}
+export async function importEyeCandyModel(eyeCandyId: string, path: string, dependencyOverrides: Record<string,string>, expectedRevision: number): Promise<{ eyeCandy: EyeCandyDefinition; asset: AssetDefinition }> {
+  if (!inTauri()) throw new Error(t('desktopModelImport'))
+  const result = await invoke<{eyeCandy: EyeCandyDefinition; asset: AssetDefinition}>('import_eye_candy_model', { eyeCandyId, path, dependencyOverrides, expectedRevision })
+  result.asset = await getModelAsset(result.asset.id)
+  return result
 }
