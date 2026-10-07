@@ -29,3 +29,5 @@ Each project is a custom binary `.mtrpack` container with a fixed header, two re
 The UI uses `src/i18n/index.ts` for copy. Only English is included in this release.
 
 See [train workflows](docs/train-workflow-acceptance.md), [rail export](docs/rail-export-compatibility.md), and [eye candy workflows](docs/eye-candy-workflow.md) for editor behavior, export contracts and acceptance limits.
+
+Train models can also be imported from Blockbench (`.bbmodel`). Projects using them offer native BBMODEL or OBJ conversion at export; see [BBMODEL compatibility](docs/bbmodel-compatibility.md).

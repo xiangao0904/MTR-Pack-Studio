@@ -54,8 +54,8 @@ pub struct ImportAnalysis {
 
 pub fn model_format(path: &Path) -> Result<ModelFormat, String> {
     match path.extension().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase().as_str() {
-        "obj" => Ok(ModelFormat::Obj), "fbx" => Ok(ModelFormat::Fbx), "mqo" => Ok(ModelFormat::Mqo),
-        _ => Err("Choose an OBJ, FBX, or MQO model file.".into()),
+        "obj" => Ok(ModelFormat::Obj), "fbx" => Ok(ModelFormat::Fbx), "mqo" => Ok(ModelFormat::Mqo), "bbmodel" => Ok(ModelFormat::Bbmodel),
+        _ => Err("Choose an OBJ, FBX, MQO, or BBMODEL model file.".into()),
     }
 }
 
@@ -71,11 +71,16 @@ pub fn parse(path: &Path, overrides: &BTreeMap<String, String>) -> Result<ModelD
         ModelFormat::Obj => parse_obj(path, overrides)?,
         ModelFormat::Fbx => parse_fbx(path, overrides)?,
         ModelFormat::Mqo => parse_mqo(path, overrides)?,
+        ModelFormat::Bbmodel => crate::bbmodel::parse(path, overrides)?,
     };
     finish_document(document)
 }
 
 pub fn parse_with_dependencies(path: &Path, overrides: &BTreeMap<String, String>) -> Result<(ModelDocument, Vec<PathBuf>, Vec<(String, Vec<u8>)>), String> {
+    if model_format(path)? == ModelFormat::Bbmodel {
+        let (references, embedded) = crate::bbmodel::dependencies(path, overrides)?;
+        return Ok((parse(path, overrides)?, references, embedded));
+    }
     if model_format(path)? != ModelFormat::Fbx {
         return Ok((parse(path, overrides)?, referenced_files(path, overrides)?, Vec::new()));
     }
@@ -131,6 +136,7 @@ pub fn referenced_files(path: &Path, overrides: &BTreeMap<String, String>) -> Re
             let scene = load_fbx(path)?;
             return Ok(referenced_fbx(path, overrides, &scene));
         }
+        ModelFormat::Bbmodel => return Ok(crate::bbmodel::dependencies(path, overrides)?.0),
     }
     Ok(files.into_iter().collect())
 }

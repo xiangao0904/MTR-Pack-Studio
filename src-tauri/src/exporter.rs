@@ -21,6 +21,8 @@ pub struct ExportOptions {
     pub model_format: String,
     #[serde(default)]
     pub only_visible: bool,
+    #[serde(default)]
+    pub bbmodel_format: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +66,12 @@ pub fn load_trains(container: &mut Container) -> Result<Vec<TrainDefinition>, St
         trains.push(train);
     }
     Ok(trains)
+}
+
+pub fn train_uses_bbmodels(container: &mut Container, train: &TrainDefinition, only_visible: bool) -> bool {
+    train.carriages.iter().flat_map(|carriage| carriage.body_models.iter().chain(&carriage.bogie_1_models).chain(&carriage.bogie_2_models))
+        .filter(|layer| !only_visible || layer.visible)
+        .any(|layer| crate::read_asset(container, &layer.asset_id).is_ok_and(|asset| asset.source_format == crate::domain::ModelFormat::Bbmodel && (!only_visible || asset.parts.iter().any(|part|!layer.hidden_parts.contains(&part.id)))))
 }
 
 fn load_asset(
@@ -136,6 +144,9 @@ pub fn validate(
             Some("modelFormat"),
         );
     }
+    if !matches!(options.bbmodel_format.as_str(), "" | "obj" | "bbmodel") {
+        issue(&mut issues, "error", "BBMODEL export format must be BBMODEL or OBJ.", None, None, Some("bbmodelFormat"));
+    }
     if trains.is_empty() && rails.is_empty() && eye_candies.is_empty() {
         issue(
             &mut issues,
@@ -187,6 +198,8 @@ pub fn validate(
                 Some("carriages"),
             );
         }
+        let native_mtr3 = options.target == "mtr3_nte" && options.bbmodel_format == "bbmodel" && train_uses_bbmodels(container, train, options.only_visible);
+        let mut native_atlas_height = 0u32;
         let mut carriage_ids = BTreeSet::new();
         let first_length = train.carriages.first().map(|value| value.length);
         let first_width = train.carriages.first().map(|value| value.width);
@@ -336,6 +349,21 @@ pub fn validate(
                 match load_asset(container, &layer.asset_id) {
                     Err(error) => errors.push(("models".into(), error)),
                     Ok((asset, document)) => {
+                        if options.bbmodel_format == "bbmodel" {
+                            if asset.source_format == crate::domain::ModelFormat::Bbmodel {
+                                let native_check = (|| {
+                                    let mut filtered = document.clone(); apply_layer_edits(&mut filtered, layer, options.only_visible)?;
+                                    crate::bbmodel::native_model(&container.read_blob(&asset.source_hash)?, &filtered.parts, layer, options.target == "mtr3_nte")
+                                })();
+                                if let Err(error) = native_check { errors.push(("models".into(),error)); }
+                                if options.target == "mtr3_nte" && document.parts.iter().any(|part|!options.only_visible || !layer.hidden_parts.contains(&part.id)) {
+                                    let size=(|| {let source:Value=serde_json::from_slice(&container.read_blob(&asset.source_hash)?).map_err(|e|e.to_string())?;crate::bbmodel::resolution(&source)})();
+                                    if let Ok(size)=size {native_atlas_height=native_atlas_height.saturating_add(size[1]);if native_atlas_height>8192{errors.push(("models".into(),"The native BBMODEL texture atlas exceeds 8192 pixels. Choose OBJ for this train.".into()));}}
+                                }
+                            } else if native_mtr3 {
+                                errors.push(("models".into(),"MTR 3 native BBMODEL trains require every exported layer to use BBMODEL. Choose OBJ for a mixed-format train.".into()));
+                            }
+                        }
                         if document.parts.is_empty() {
                             errors.push((
                                 "models".into(),
@@ -478,6 +506,7 @@ pub fn export(
             &trains,
             &container.index.namespace.clone(),
             &options.model_format,
+            &options.bbmodel_format,
             options.only_visible,
             &mut files,
         )?;
@@ -487,6 +516,7 @@ pub fn export(
             &trains,
             &container.index.namespace.clone(),
             options.only_visible,
+            &options.bbmodel_format,
             &mut files,
         )?;
     }
@@ -508,6 +538,7 @@ fn build_mtr4(
     trains: &[TrainDefinition],
     namespace: &str,
     format: &str,
+    bbmodel_format: &str,
     only_visible: bool,
     files: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<(), String> {
@@ -522,6 +553,7 @@ fn build_mtr4(
                 "body",
                 &carriage.body_models,
                 format,
+                bbmodel_format,
                 only_visible,
                 files,
             )?;
@@ -532,6 +564,7 @@ fn build_mtr4(
                 "bogie1",
                 &carriage.bogie_1_models,
                 format,
+                bbmodel_format,
                 only_visible,
                 files,
             )?;
@@ -542,6 +575,7 @@ fn build_mtr4(
                 "bogie2",
                 &carriage.bogie_2_models,
                 format,
+                bbmodel_format,
                 only_visible,
                 files,
             )?;
@@ -560,6 +594,47 @@ fn build_mtr4(
     Ok(())
 }
 
+fn native_texture_bytes(container:&mut Container,asset:&AssetDefinition,material:Option<&ModelMaterial>,layer:&ModelLayer) -> Result<Vec<u8>,String> {
+    let bytes=texture_bytes(container,asset,material,layer)?;
+    if !layer.flip_texture_v {return Ok(bytes);}
+    let image=image::load_from_memory(&bytes).map_err(|e|e.to_string())?.flipv();
+    let mut output=std::io::Cursor::new(Vec::new());image.write_to(&mut output,image::ImageFormat::Png).map_err(|e|e.to_string())?;Ok(output.into_inner())
+}
+
+fn build_mtr3_bbmodel(container:&mut Container,train:&TrainDefinition,namespace:&str,only_visible:bool,custom:&mut serde_json::Map<String,Value>,files:&mut BTreeMap<String,Vec<u8>>) -> Result<(),String> {
+    let mut chunks=Vec::new();let mut property_parts=Vec::new();let(mut width,mut height)=(1u32,0u32);
+    for carriage in &train.carriages {
+        let (white,black)=carriage.placement.expressions()?;
+        for (layers,z) in [(&carriage.body_models,0.0),(&carriage.bogie_1_models,carriage.bogie_1_position),(&carriage.bogie_2_models,carriage.bogie_2_position)] {
+            for layer in layers.iter().filter(|l|!only_visible||l.visible) {
+                let(asset,mut document)=load_asset(container,&layer.asset_id)?;apply_layer_edits(&mut document,layer,only_visible)?;
+                if document.parts.is_empty(){continue;}
+                let identity=export_base(&train.id,&format!("{}:{}",carriage.id,layer.id));name_parts(&mut document,&identity);
+                let mut model=crate::bbmodel::native_model(&container.read_blob(&asset.source_hash)?,&document.parts,layer,true)?;
+                let size=crate::bbmodel::resolution(&model)?;
+                if height.checked_add(size[1]).is_none_or(|v|v>8192){return Err("The native BBMODEL texture atlas exceeds 8192 pixels. Choose OBJ for this train.".into());}
+                let texture=native_texture_bytes(container,&asset,document.materials.first(),layer)?;
+                let image=image::load_from_memory(&texture).map_err(|e|e.to_string())?.resize_exact(size[0],size[1],image::imageops::FilterType::Nearest).to_rgba8();
+                crate::bbmodel::shift_model(&mut model,z,height,&identity)?;
+                for part in &document.parts {
+                    let(white,black)=if let Some(rule)=layer.part_rules.get(&part.id){rule.expressions()?}else{(white.clone(),black.clone())};
+                    property_parts.push(mtr3_part(safe_name(&part.name),&white,&black,layer.render_stage_for(&part.id)));
+                }
+                chunks.push((model,image,height));width=width.max(size[0]);height+=size[1];
+            }
+        }
+    }
+    let mut atlas=image::RgbaImage::new(width,height.max(1));let mut elements=Vec::new();let mut outliner=Vec::new();
+    for(mut model,image,y) in chunks { image::imageops::overlay(&mut atlas,&image,0,y as i64);elements.extend(model["elements"].as_array_mut().ok_or("Missing native elements")?.drain(..));outliner.extend(model["outliner"].as_array_mut().ok_or("Missing native groups")?.drain(..)); }
+    let mut bytes=std::io::Cursor::new(Vec::new());image::DynamicImage::ImageRgba8(atlas).write_to(&mut bytes,image::ImageFormat::Png).map_err(|e|e.to_string())?;
+    let texture_path=format!("textures/vehicle/{}.png",blake3::hash(bytes.get_ref()).to_hex());files.insert(format!("assets/{namespace}/{texture_path}"),bytes.into_inner());
+    let base=export_base(&train.export_id,"native_bbmodel");
+    files.insert(format!("assets/{namespace}/models/vehicle/{base}.bbmodel"),pretty(&json!({"meta":{"format_version":"4.10","model_format":"modded_entity","box_uv":true},"resolution":{"width":width,"height":height.max(1)},"elements":elements,"outliner":outliner,"textures":[{"id":"0","name":texture_path.rsplit('/').next().unwrap(),"relative_path":format!("../../{texture_path}")}],"animations":[]}))?);
+    files.insert(format!("assets/{namespace}/properties/vehicle/{base}.json"),pretty(&json!({"transport_mode":"train","length":train.carriages[0].length,"width":train.carriages[0].width,"door_max":0,"parts":property_parts}))?);
+    custom.insert(train.export_id.clone(),json!({"name":train.name,"description":train.description,"color":train.color,"base_train_type":train.mtr3_base_train_type,"model":format!("{namespace}:models/vehicle/{base}.bbmodel"),"model_properties":format!("{namespace}:properties/vehicle/{base}.json"),"texture_id":format!("{namespace}:{texture_path}"),"flipV":false}));
+    Ok(())
+}
+
 fn write_mtr4_layers(
     container: &mut Container,
     namespace: &str,
@@ -567,6 +642,7 @@ fn write_mtr4_layers(
     slot: &str,
     layers: &[ModelLayer],
     format: &str,
+    bbmodel_format: &str,
     only_visible: bool,
     files: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<Vec<Value>, String> {
@@ -579,6 +655,21 @@ fn write_mtr4_layers(
         let (asset, mut document) = load_asset(container, &layer.asset_id)?;
         apply_layer_edits(&mut document, layer, only_visible)?;
         name_parts(&mut document, &layer.id);
+        if asset.source_format == crate::domain::ModelFormat::Bbmodel && bbmodel_format == "bbmodel" {
+            if document.parts.is_empty() { continue; }
+            let suffix = format!("{base}_{slot}_{layer_index}_bbmodel");
+            let mut native = crate::bbmodel::native_model(&container.read_blob(&asset.source_hash)?, &document.parts, layer, false)?;
+            let bytes = native_texture_bytes(container, &asset, document.materials.first(), layer)?;
+            let texture_path = format!("textures/vehicle/{}.png",blake3::hash(&bytes).to_hex());
+            files.insert(format!("assets/{namespace}/{texture_path}"),bytes);
+            native["textures"]=json!([{"id":"0","name":texture_path.rsplit('/').next().unwrap(),"relative_path":format!("../../{texture_path}")}]);
+            files.insert(format!("assets/{namespace}/models/vehicle/{suffix}.bbmodel"), pretty(&native)?);
+            files.insert(format!("assets/{namespace}/properties/vehicle/{suffix}.json"),pretty(&mtr4_properties(&document,layer))?);
+            files.insert(format!("assets/{namespace}/properties/definition/{suffix}.json"),pretty(&json!({"positionDefinitions":[{"name":"origin","positions":[{"x":0,"y":0,"z":0}],"positionsFlipped":[]}]}))?);
+            output.push(json!({"modelResource":format!("{namespace}:models/vehicle/{suffix}.bbmodel"),"textureResource":format!("{namespace}:{texture_path}"),"modelPropertiesResource":format!("{namespace}:properties/vehicle/{suffix}.json"),"positionDefinitionsResource":format!("{namespace}:properties/definition/{suffix}.json"),"flipTextureV":false}));
+            continue;
+        }
+        let format = if asset.source_format == crate::domain::ModelFormat::Bbmodel && bbmodel_format == "obj" { "obj" } else { format };
         let groups = material_groups(&document);
         for (group_index, mut parts) in groups {
             let group_name = group_index
@@ -633,10 +724,12 @@ fn build_mtr3(
     trains: &[TrainDefinition],
     namespace: &str,
     only_visible: bool,
+    bbmodel_format: &str,
     files: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<(), String> {
     let mut custom = serde_json::Map::new();
     for train in trains {
+        if bbmodel_format == "bbmodel" && train_uses_bbmodels(container, train, only_visible) { build_mtr3_bbmodel(container,train,namespace,only_visible,&mut custom,files)?; continue; }
         let mut segments = Vec::new();
         let mut property_parts = Vec::new();
         for carriage in &train.carriages {
@@ -1812,12 +1905,14 @@ mod tests {
                 minecraft_version: "1.20.4".into(),
                 model_format: "obj".into(),
                 only_visible: false,
+                bbmodel_format: String::new(),
             },
             ExportOptions {
                 target: "mtr3_nte".into(),
                 minecraft_version: "1.20.1".into(),
                 model_format: "obj".into(),
                 only_visible: false,
+                bbmodel_format: String::new(),
             },
         ] {
             let output = root.join(format!("{}.zip", options.target));
@@ -1971,12 +2066,89 @@ mod tests {
             fs::remove_dir_all(root).unwrap();
         }
     }
+    fn bbmodel_fixture(fixture:&mut Fixture) -> AssetDefinition {
+        let path=std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mtr4-4.0.5/bogie_1.bbmodel");
+        let asset=crate::import_model_asset_into(&mut fixture.container,&path,&BTreeMap::new()).unwrap();
+        let carriage=&mut fixture.train.carriages[0];
+        for layer in carriage.body_models.iter_mut().chain(&mut carriage.bogie_1_models) {layer.asset_id=asset.id.clone();layer.part_rules.clear();}
+        fixture.save();asset
+    }
+    #[test]
+    fn blockbench_models_export_natively_or_as_obj_with_resolved_mtr4_resources() {
+        let mut fixture=Fixture::new();let asset=bbmodel_fixture(&mut fixture);
+        for choice in ["bbmodel","obj"] {
+            let opt=ExportOptions {bbmodel_format:choice.into(),..options("mtr4","mqo")};
+            assert!(validate(&mut fixture.container,&opt).unwrap().is_empty());
+            let path=fixture.root.join(format!("{choice}.zip"));export(&mut fixture.container,&path,&opt).unwrap();let first=fs::read(&path).unwrap();export(&mut fixture.container,&path,&opt).unwrap();assert_eq!(first,fs::read(&path).unwrap());
+            let files=unzip(&path);let ns=fixture.container.index.namespace.clone();let manifest=read_json(&files,&format!("assets/{ns}/mtr_custom_resources.json"));check_schema(&manifest,"customResources.json");
+            for slot in ["models","bogie1Models"] {
+                let entry=&manifest["vehicles"][0][slot][0];check_schema(entry,"vehicleModel.json");
+                for key in ["modelResource","textureResource","modelPropertiesResource","positionDefinitionsResource"] {let(name,path)=entry[key].as_str().unwrap().split_once(':').unwrap();assert!(files.contains_key(&format!("assets/{name}/{path}")));}
+                assert!(entry["modelResource"].as_str().unwrap().ends_with(&format!(".{choice}")));
+                let model_path=entry["modelResource"].as_str().unwrap().replace(':',"/");let model=&files[&format!("assets/{model_path}")];
+                if choice=="bbmodel" {
+                    let model:Value=serde_json::from_slice(model).unwrap();assert_eq!(model["elements"].as_array().unwrap().len(),4);assert_eq!(model["textures"].as_array().unwrap().len(),1);assert!(model["textures"][0].get("source").is_none());assert!(model["textures"][0]["relative_path"].as_str().unwrap().starts_with("../../textures/vehicle/"));
+                    let property=entry["modelPropertiesResource"].as_str().unwrap().replace(':',"/");let properties=read_json(&files,&format!("assets/{property}"));assert_eq!(properties["parts"][0]["names"][0],model["outliner"][0]["name"]);
+                    assert_eq!(entry["flipTextureV"],false);
+                } else {assert!(std::str::from_utf8(model).unwrap().contains("v -0.875 -0.0625 2"));}
+            }
+        }
+        fixture.train.carriages[0].body_models[0].transform.translation=[1.0,0.0,0.0];fixture.save();
+        let issues=validate(&mut fixture.container,&ExportOptions {bbmodel_format:"bbmodel".into(),..options("mtr4","obj")}).unwrap();assert!(issues.iter().any(|i|i.layer_id.as_deref()==Some("body-layer")&&i.message.contains("transforms")));
+        assert!(validate(&mut fixture.container,&ExportOptions {bbmodel_format:"obj".into(),..options("mtr4","obj")}).unwrap().is_empty());
+        assert_eq!(asset.source_format,ModelFormat::Bbmodel);fixture.finish();
+    }
+    #[test]
+    fn native_mtr3_bbmodel_uses_one_model_and_atlas_with_bogie_offsets_and_part_rules() {
+        let mut fixture=Fixture::new();let asset=bbmodel_fixture(&mut fixture);let id=asset.parts[0].id.clone();
+        let mut rear=fixture.train.carriages[0].bogie_1_models[0].clone();rear.id="rear-bogie".into();fixture.train.carriages[0].bogie_2_models.push(rear);
+        fixture.train.carriages[0].body_models[0].part_rules.insert(id,crate::domain::CarPlacementRule {preset:crate::domain::PlacementPreset::Last,..Default::default()});fixture.save();
+        let opt=ExportOptions {bbmodel_format:"bbmodel".into(),..options("mtr3_nte","obj")};assert!(validate(&mut fixture.container,&opt).unwrap().is_empty());
+        let path=fixture.root.join("native3.zip");export(&mut fixture.container,&path,&opt).unwrap();let files=unzip(&path);let ns=fixture.container.index.namespace.clone();let manifest=read_json(&files,&format!("assets/{ns}/mtr_custom_resources.json"));let train=&manifest["custom_trains"]["train"];
+        assert!(train["model"].as_str().unwrap().ends_with(".bbmodel"));assert!(!train["model"].as_str().unwrap().contains('|'));
+        let model_path=format!("assets/{}",train["model"].as_str().unwrap().replace(':',"/"));let model=read_json(&files,&model_path);
+        assert_eq!(model["resolution"],json!({"width":186,"height":231}));assert_eq!(model["outliner"].as_array().unwrap().len(),3);assert_eq!(model["elements"].as_array().unwrap().len(),12);
+        assert_eq!(model["elements"][4]["uv_offset"],json!([0,77]));assert_eq!(model["elements"][8]["uv_offset"],json!([0,154]));
+        assert_eq!(model["elements"][4]["from"][2],json!(-144.0));assert_eq!(model["elements"][8]["from"][2],json!(80.0));
+        let properties=read_json(&files,&format!("assets/{}",train["model_properties"].as_str().unwrap().replace(':',"/")));
+        assert_eq!(properties["parts"][0]["whitelisted_cars"],"-1");assert_eq!(properties["parts"][0]["blacklisted_cars"],"%1");
+        for (part,root) in properties["parts"].as_array().unwrap().iter().zip(model["outliner"].as_array().unwrap()){assert_eq!(part["name"],root["name"]);}
+        let texture=&files[&format!("assets/{}",train["texture_id"].as_str().unwrap().replace(':',"/"))];let image=image::load_from_memory(texture).unwrap();assert_eq!((image.width(),image.height()),(186,231));
+        // Atlas assembly preserves each source texture without UV stretching.
+        let original=image::load_from_memory(include_bytes!("../tests/fixtures/mtr4-4.0.5/bogie_1.png")).unwrap().to_rgba8();let atlas=image.to_rgba8();for y in [0,77,154]{assert_eq!(atlas.get_pixel(10,y+10),original.get_pixel(10,10));}
+        fixture.train.carriages[0].body_models[0].asset_id="asset".into();fixture.train.carriages[0].body_models[0].part_rules.clear();fixture.save();
+        assert!(validate(&mut fixture.container,&opt).unwrap().iter().any(|i|i.layer_id.as_deref()==Some("body-layer")&&i.message.contains("mixed-format")));
+        fixture.finish();
+    }
+    #[test]
+    fn native_bbmodel_choice_keeps_unrelated_obj_trains_on_the_obj_export_path() {
+        let mut fixture=Fixture::new();bbmodel_fixture(&mut fixture);
+        let mut other=TrainDefinition::new("OBJ Train","obj_train");other.mtr3_base_train_type="sp1900".into();
+        let mut layer=fixture.train.carriages[0].body_models[0].clone();layer.asset_id="asset".into();other.carriages[0].body_models.push(layer);
+        let hash=fixture.container.put_blob(&serde_json::to_vec(&other).unwrap(),"application/json").unwrap();
+        fixture.container.index.content.push(ContentEntry {id:other.id.clone(),kind:"train".into(),name:other.name.clone(),file:"other.json".into(),updated_at:0,resources:vec![hash]});fixture.container.commit().unwrap();
+        let opt=ExportOptions {bbmodel_format:"bbmodel".into(),..options("mtr3_nte","obj")};assert!(validate(&mut fixture.container,&opt).unwrap().is_empty());
+        let path=fixture.root.join("mixed-project.zip");export(&mut fixture.container,&path,&opt).unwrap();let files=unzip(&path);
+        let manifest=read_json(&files,&format!("assets/{}/mtr_custom_resources.json",fixture.container.index.namespace));
+        assert!(manifest["custom_trains"]["train"]["model"].as_str().unwrap().ends_with(".bbmodel"));
+        assert!(manifest["custom_trains"]["obj_train"]["model"].as_str().unwrap().contains(".obj|"));fixture.finish();
+    }
+    #[test]
+    fn hidden_bbmodel_parts_do_not_force_visible_obj_trains_into_native_export() {
+        let mut fixture=Fixture::new();let asset=bbmodel_fixture(&mut fixture);
+        fixture.train.carriages[0].body_models[0].asset_id="asset".into();
+        fixture.train.carriages[0].bogie_1_models[0].hidden_parts=asset.parts.iter().map(|part|part.id.clone()).collect();fixture.save();
+        let opt=ExportOptions {bbmodel_format:"bbmodel".into(),only_visible:true,..options("mtr3_nte","obj")};assert!(validate(&mut fixture.container,&opt).unwrap().is_empty());
+        let path=fixture.root.join("visible-obj.zip");export(&mut fixture.container,&path,&opt).unwrap();let files=unzip(&path);
+        assert!(!files.keys().any(|path|path.ends_with(".bbmodel")));fixture.finish();
+    }
     fn options(target: &str, format: &str) -> ExportOptions {
         ExportOptions {
             target: target.into(),
             minecraft_version: if target == "mtr4" { "1.20.4" } else { "1.20.1" }.into(),
             model_format: format.into(),
             only_visible: false,
+            bbmodel_format: String::new(),
         }
     }
     fn unzip(path: &Path) -> BTreeMap<String, Vec<u8>> {

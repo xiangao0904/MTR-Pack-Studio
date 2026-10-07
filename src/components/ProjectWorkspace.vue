@@ -9,7 +9,7 @@ const RailEditor = defineAsyncComponent(() => import('./RailEditor.vue'))
 const loadTrainEditor = () => import('./TrainEditor.vue')
 const TrainEditor = defineAsyncComponent(loadTrainEditor)
 const AssetLibrary = defineAsyncComponent(() => import('./AssetLibrary.vue'))
-import { chooseExportPath, createEyeCandy, createRail, createTrain, exportResourcePack, getProject, saveProject, setProjectCover, updateProjectSettings, validateExport, type ContentEntry, type ExportOptions, type ProjectData, type ProjectSummary, type ValidationIssue } from '../lib/projects'
+import { chooseExportPath, createEyeCandy, createRail, createTrain, exportResourcePack, getProject, hasTrainBbmodels, saveProject, setProjectCover, updateProjectSettings, validateExport, type ContentEntry, type ExportOptions, type ProjectData, type ProjectSummary, type ValidationIssue } from '../lib/projects'
 
 const props = defineProps<{ project: ProjectSummary }>()
 const emit = defineEmits<{ back: []; editorContext: [context: {name:string;status:'saving'|'saved'|'failed'}] }>()
@@ -50,6 +50,7 @@ let settingsTimer: ReturnType<typeof setTimeout> | undefined
 let settingsWrite: Promise<void> | null = null
 const exportOpen = ref(false)
 const exportBusy = ref(false)
+const bbmodelAvailable = ref(false)
 const exportStage = ref(t('validating'))
 const exportIssues = ref<ValidationIssue[]>([])
 const exportOptions = ref<ExportOptions>(JSON.parse(localStorage.getItem('mtr-pack-studio:last-export') || 'null') || { target: 'mtr4', minecraftVersion: '1.20.4', modelFormat: 'obj' })
@@ -103,7 +104,14 @@ function updateEntry(entry: ContentEntry) {
   const index = data.value.content.findIndex(item => item.id === entry.id); if (index >= 0) data.value.content[index] = entry
   selectedTrain.value = entry
 }
-function openExport() { exportOptions.value.onlyVisible = false; exportIssues.value = []; exportOpen.value = true }
+async function openExport() {
+  if (exportBusy.value) return
+  exportOptions.value.onlyVisible = false; exportIssues.value = []; bbmodelAvailable.value = false; exportOpen.value = true
+  exportBusy.value = true; exportStage.value = t('loadingAssets')
+  try { await flushSave(); bbmodelAvailable.value = await hasTrainBbmodels(props.project.path); if (!bbmodelAvailable.value) exportOptions.value.bbmodelFormat = 'obj'; else exportOptions.value.bbmodelFormat ||= 'obj' }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); exportOpen.value = false }
+  finally { exportBusy.value = false }
+}
 function changeTarget() { exportOptions.value.minecraftVersion = exportOptions.value.target === 'mtr4' ? '1.20.4' : '1.20.1'; exportIssues.value = [] }
 async function submitExport() {
   if (!data.value) return
@@ -240,7 +248,7 @@ function formatDate(timestamp: number) {
       </main>
     </div>
     <Transition name="studio-dialog"><div v-if="creating" class="work-modal-scrim" @click.self="creating = false"><form class="work-modal" @submit.prevent="submitTrain"><div><h2>{{ creationLabel }}</h2><button type="button" :aria-label="t('close')" @click="creating = false"><X :size="18" /></button></div><label>{{ creatingKind === 'eye_candy' ? t('eyeCandyName') : creatingKind === 'rail' ? t('railName') : t('trainName') }}<input v-model="trainName" autofocus maxlength="80" :placeholder="creatingKind === 'eye_candy' ? t('eyeCandyNamePlaceholder') : creatingKind === 'rail' ? t('railNamePlaceholder') : t('trainNamePlaceholder')" /></label><LoadingProgress v-if="busy" :label="t('saving')" /><footer><button type="button" @click="creating = false">{{ t('cancel') }}</button><button type="submit" :disabled="busy || !trainName.trim()">{{ creationAction }}</button></footer></form></div></Transition>
-    <Transition name="studio-dialog"><div v-if="exportOpen" class="work-modal-scrim" @click.self="exportOpen = false"><form class="work-modal export-modal" @submit.prevent="submitExport"><div><h2>{{ t('exportPack') }}</h2><button type="button" :aria-label="t('close')" @click="exportOpen=false"><X :size="18" /></button></div><label>{{ t('exportTarget') }}<select v-model="exportOptions.target" @change="changeTarget"><option value="mtr4">MTR 4</option><option value="mtr3_nte">MTR 3 + NTE</option></select></label><label>{{ t('minecraftVersion') }}<select v-model="exportOptions.minecraftVersion"><option v-for="version in exportOptions.target === 'mtr4' ? ['1.20.4'] : mtr3Versions" :key="version">{{ version }}</option></select></label><label v-if="exportOptions.target==='mtr4'">{{ t('modelFormat') }}<select v-model="exportOptions.modelFormat"><option value="obj">OBJ</option><option value="mqo">MQO</option></select></label><label class="export-visibility"><input v-model="exportOptions.onlyVisible" type="checkbox" /><span>{{ t('onlyExportVisible') }}<small>{{ t('onlyExportVisibleHint') }}</small></span></label><div v-if="exportIssues.length" class="export-issues"><button v-for="(issue,index) in exportIssues" :key="index" type="button" :class="issue.severity" @click="openIssue(issue)"><AlertTriangle :size="15" /><span>{{ issue.message }}</span></button></div><LoadingProgress v-if="exportBusy" :label="exportStage" /><footer><button type="button" @click="exportOpen=false">{{ t('cancel') }}</button><button type="submit" :disabled="exportBusy">{{ exportBusy ? exportStage : t('continueExport') }}</button></footer></form></div></Transition>
+    <Transition name="studio-dialog"><div v-if="exportOpen" class="work-modal-scrim" @click.self="exportOpen = false"><form class="work-modal export-modal" @submit.prevent="submitExport"><div><h2>{{ t('exportPack') }}</h2><button type="button" :aria-label="t('close')" @click="exportOpen=false"><X :size="18" /></button></div><label>{{ t('exportTarget') }}<select v-model="exportOptions.target" @change="changeTarget"><option value="mtr4">MTR 4</option><option value="mtr3_nte">MTR 3 + NTE</option></select></label><label>{{ t('minecraftVersion') }}<select v-model="exportOptions.minecraftVersion"><option v-for="version in exportOptions.target === 'mtr4' ? ['1.20.4'] : mtr3Versions" :key="version">{{ version }}</option></select></label><label v-if="exportOptions.target==='mtr4'">{{ t('modelFormat') }}<select v-model="exportOptions.modelFormat"><option value="obj">OBJ</option><option value="mqo">MQO</option></select></label><label v-if="bbmodelAvailable">{{ t('bbmodelExportFormat') }}<select v-model="exportOptions.bbmodelFormat" @change="exportIssues=[]"><option value="obj">{{ t('convertBbmodelToObj') }}</option><option value="bbmodel">{{ t('keepBbmodel') }}</option></select><small>{{ t(exportOptions.target === 'mtr3_nte' ? 'bbmodelMtr3Hint' : 'bbmodelExportHint') }}</small></label><label class="export-visibility"><input v-model="exportOptions.onlyVisible" type="checkbox" /><span>{{ t('onlyExportVisible') }}<small>{{ t('onlyExportVisibleHint') }}</small></span></label><div v-if="exportIssues.length" class="export-issues"><button v-for="(issue,index) in exportIssues" :key="index" type="button" :class="issue.severity" @click="openIssue(issue)"><AlertTriangle :size="15" /><span>{{ issue.message }}</span></button></div><LoadingProgress v-if="exportBusy" :label="exportStage" /><footer><button type="button" @click="exportOpen=false">{{ t('cancel') }}</button><button type="submit" :disabled="exportBusy">{{ exportBusy ? exportStage : t('continueExport') }}</button></footer></form></div></Transition>
     <div v-if="notice" class="work-notice" role="status">{{ notice }}<button @click="notice = ''"><X :size="16" /></button></div>
   </div>
 </template>

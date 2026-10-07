@@ -2173,6 +2173,7 @@ dependencies = [
 name = "mtr-pack-studio"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "image",
  "png 0.18.1",

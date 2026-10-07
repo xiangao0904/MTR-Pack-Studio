@@ -20,7 +20,7 @@ export interface PreviewCarriage { carriageId: string; reversed: boolean }
 export interface TrainDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; tags: string[]; mtr3BaseTrainType: string; carriages: CarriageDefinition[]; previewConsist: PreviewCarriage[] }
 export interface RailDefinition { id: string; revision: number; exportId: string; name: string; description: string; repeatInterval: number; models: ModelLayer[] }
 export interface EyeCandyDefinition { id: string; revision: number; exportId: string; name: string; description: string; color: string; models: ModelLayer[] }
-export type ModelFormat = 'obj' | 'fbx' | 'mqo'
+export type ModelFormat = 'obj' | 'fbx' | 'mqo' | 'bbmodel'
 export interface ModelPartSummary { id: string; name: string; triangleCount: number }
 export interface ModelMaterial { id: string; name: string; color: [number, number, number, number]; texture?: string; properties?: MaterialProperties }
 export interface AssetDefinition { materials: ModelMaterial[]; id: string; name: string; sourceFormat: ModelFormat; sourceHash: string; documentHash: string; previewHash: string; dependencies: { name: string; hash: string; mediaType: string }[]; parts: ModelPartSummary[]; warnings: string[]; legacyUvCorrection?: boolean }
@@ -28,7 +28,7 @@ export interface ModelCatalogItem { id: string; name: string; sourceFormat: Mode
 export interface TextureCatalogItem { hash: string; name: string; width: number; height: number; references: string[] }
 export interface AssetCatalog { models: ModelCatalogItem[]; textures: TextureCatalogItem[] }
 export interface ImportAnalysis { format: ModelFormat; missingDependencies: string[]; parts: ModelPartSummary[]; warnings: string[] }
-export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo'; onlyVisible?: boolean }
+export interface ExportOptions { target: 'mtr4' | 'mtr3_nte'; minecraftVersion: string; modelFormat: 'obj' | 'mqo'; onlyVisible?: boolean; bbmodelFormat?: 'obj' | 'bbmodel' }
 export interface ValidationIssue { severity: 'error' | 'warning'; message: string; trainId?: string; railId?: string; eyeCandyId?: string; carriageId?: string; layerId?: string | null; field?: string }
 export interface ExportReport { path: string; fileCount: number; warnings: ValidationIssue[] }
 
@@ -152,7 +152,7 @@ export async function deleteTrain(path: string, trainId: string): Promise<void> 
 
 export async function chooseModelFile(): Promise<string | null> {
   if (!inTauri()) throw new Error(t('desktopModelImport'))
-  return open({ directory: false, multiple: false, title: 'Import Model', filters: [{ name: '3D Models', extensions: ['obj', 'fbx', 'mqo'] }] })
+  return open({ directory: false, multiple: false, title: t('importModelAsset'), filters: [{ name: t('modelFiles'), extensions: ['obj', 'fbx', 'mqo', 'bbmodel'] }] })
 }
 
 export async function chooseModelDependency(name: string): Promise<string | null> {
@@ -266,6 +266,17 @@ export async function updateProjectSettings(path: string, namespace: string, des
 export async function validateExport(options: ExportOptions): Promise<ValidationIssue[]> {
   if (inTauri()) return invoke<ValidationIssue[]>('validate_export', { options })
   return [{ severity: 'warning', message: t('browserExportWarning') }]
+}
+
+export async function hasTrainBbmodels(path: string): Promise<boolean> {
+  if (inTauri()) return invoke<boolean>('has_train_bbmodels')
+  const project = await getProject(path)
+  const referenced = new Set<string>()
+  for (const entry of project.content.filter(item => item.kind === 'train')) {
+    const train = await getTrain(path, entry.id)
+    for (const carriage of train.carriages) for (const layer of [...carriage.bodyModels, ...carriage.bogie1Models, ...carriage.bogie2Models]) referenced.add(layer.assetId)
+  }
+  return (await listModelAssets(path)).some(asset => referenced.has(asset.id) && asset.sourceFormat === 'bbmodel')
 }
 
 export async function chooseExportPath(projectName: string, target: ExportOptions['target']): Promise<string | null> {

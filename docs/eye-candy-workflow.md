@@ -2,7 +2,7 @@
 
 Eye candy is editable project content for static station props and environmental
 objects. Create an entry from **Eye candy → New Eye Candy**, open it, and import
-an OBJ, FBX or MQO model, or choose a model from the Asset Library. Objects may
+an OBJ, FBX, MQO or BBMODEL model, or choose a model from the Asset Library. Objects may
 contain multiple layers. Layers can be renamed, reordered, duplicated, hidden or
 removed. The model tree supports picking and hiding individual parts.
 

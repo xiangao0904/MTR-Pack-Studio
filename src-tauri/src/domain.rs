@@ -230,7 +230,7 @@ pub struct ModelPartSummary { pub id: String, pub name: String, pub triangle_cou
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum ModelFormat { Obj, Fbx, Mqo }
+pub enum ModelFormat { Obj, Fbx, Mqo, Bbmodel }
 
 impl TrainDefinition {
     pub fn new(name: &str, export_id: &str) -> Self {

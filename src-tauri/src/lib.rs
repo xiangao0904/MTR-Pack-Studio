@@ -2,6 +2,7 @@ mod material;
 mod container;
 mod domain;
 mod model;
+mod bbmodel;
 mod exporter;
 #[cfg(test)]
 mod workflow_tests;
@@ -189,7 +190,7 @@ fn read_asset(container: &mut Container, id: &str) -> Result<AssetDefinition, St
 fn media_type(path: &Path) -> &'static str {
     match path.extension().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase().as_str() {
         "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "obj" => "model/obj",
-        "mtl" => "model/mtl", "fbx" => "model/vnd.fbx", "mqo" => "model/vnd.mqo", _ => "application/octet-stream",
+        "mtl" => "model/mtl", "fbx" => "model/vnd.fbx", "mqo" => "model/vnd.mqo", "bbmodel" => "model/vnd.blockbench+json", _ => "application/octet-stream",
     }
 }
 
@@ -944,6 +945,16 @@ fn legacy_uv_correction(container: &mut Container, asset: &AssetDefinition) -> R
     Ok(model::is_metasequoia_obj(&container.read_blob(&asset.source_hash)?))
 }
 
+#[tauri::command]
+fn has_train_bbmodels(state: State<AppState>) -> Result<bool, String> {
+    let mut active = state.active.lock().map_err(|_| lock_error())?;
+    let container = &mut active.as_mut().ok_or("No project is open.")?.container;
+    for train in exporter::load_trains(container)? {
+        if exporter::train_uses_bbmodels(container, &train, false) { return Ok(true); }
+    }
+    Ok(false)
+}
+
 fn asset_preview(container: &mut Container, asset: &AssetDefinition, bindings: &[MaterialBinding]) -> Result<Vec<u8>, String> {
     let mut document: model::ModelDocument = rmp_serde::from_slice(&container.read_blob(&asset.document_hash)?).map_err(|e| e.to_string())?;
     let mut textures = std::collections::BTreeMap::new();
@@ -1149,6 +1160,7 @@ pub fn run() {
             create_project,
             open_project,
             get_active_project,
+            has_train_bbmodels,
             create_eye_candy, get_eye_candy, update_eye_candy, delete_eye_candy, import_eye_candy_model,
             create_rail, get_rail, update_rail, delete_rail, import_rail_model, import_default_rail_model,
             create_train,
