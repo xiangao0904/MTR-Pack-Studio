@@ -34,6 +34,8 @@ pub enum TextureChannel {
     Roughness,
     Emissive,
     Occlusion,
+    LabNormal,
+    LabSpecular,
 }
 
 impl TextureChannel {
@@ -44,6 +46,8 @@ impl TextureChannel {
             Self::Roughness => "roughness",
             Self::Emissive => "emissive",
             Self::Occlusion => "occlusion",
+            Self::LabNormal => "labNormal",
+            Self::LabSpecular => "labSpecular",
         }
     }
 }

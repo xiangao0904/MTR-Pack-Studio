@@ -154,11 +154,11 @@ export function prepareMaterialTextures(root: THREE.Object3D) {
   root.traverse(object => {
     if (!(object instanceof THREE.Mesh)) return
     for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
-      const surface = material as THREE.MeshStandardMaterial
-      for (const key of ['map','emissiveMap','normalMap','metalnessMap','roughnessMap','aoMap','alphaMap'] as const) {
+      const surface = material as THREE.MeshPhysicalMaterial
+      for (const key of ['map','emissiveMap','normalMap','metalnessMap','roughnessMap','aoMap','alphaMap','specularColorMap','specularIntensityMap'] as const) {
         const texture = surface[key]
         if (!texture) continue
-        const colorSpace = key === 'map' || key === 'emissiveMap' ? THREE.SRGBColorSpace : THREE.NoColorSpace
+        const colorSpace = key === 'map' || key === 'emissiveMap' || key === 'specularColorMap' ? THREE.SRGBColorSpace : THREE.NoColorSpace
         let spaces = variants.get(texture)
         if (!spaces) { spaces = new Map(); variants.set(texture, spaces) }
         if (!spaces.has(colorSpace)) {

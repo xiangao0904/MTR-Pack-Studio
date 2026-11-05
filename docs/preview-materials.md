@@ -75,9 +75,8 @@ properties and images.
 
 Existing assets remain readable. Properties discarded by an older import cannot
 be recovered from its simplified model document: reimport the original model or
-set layer overrides. Advanced PBR properties are saved for preview; current game
-exporters still use their existing base-color texture pipeline, with opacity
-overrides applied to exported colors/textures. They do not emit shader-pack PBR maps.
+set layer overrides. PBR properties and texture overrides are saved in the project and exported as
+Lab PBR 1.3 texture siblings. Opacity overrides still apply to exported colors/textures.
 
 Regression coverage includes legacy defaults, property validation, channel packing,
 image embedding, material independence, project reopen, cutout AO, texture filtering
@@ -127,3 +126,48 @@ dispose model materials, recreate the ground or reparse GLB. The expensive HDR s
 background cubemap and PMREM rebuild 120 ms after sky parameters stop changing;
 intermediate light and fog values appear immediately. A mode switch or model rebuild
 still performs a complete setup. The last slider value is always used for the sky.
+
+## Lab PBR 1.3
+
+Materials accept **Lab PBR normal (_n)** and **Lab PBR specular (_s)** images through
+file import or the texture library. These are distinct from conventional normal,
+roughness and metalness maps. Importing a PBR map locks PBR sliders and the emission
+picker for that material; base-color images leave sliders available. Opacity,
+cutout, culling and transparency remain editable. Reset material removes the layer's
+custom bindings. Source PBR maps continue to control materials after reset.
+
+Without PBR maps, material sliders update Three.js material values on the next
+animation frame without rebuilding GLB or waiting for project saves. Export bakes
+those values into uniform `_n.png` / `_s.png` siblings of each color texture.
+Conventional PBR maps are also converted. MTL stays on the existing color/opacity
+contract: Minecraft gets the material properties from Lab textures.
+
+The Lab specular red channel stores perceptual smoothness. Three.js/glTF roughness
+is also perceptual, so conversion is `smoothness = 1 - roughness`. Both renderers
+square perceptual roughness for the GGX distribution. Green is linear dielectric
+F0 (0–229) or a conductor identifier (230–255). The metalness slider selects 0 or 1;
+legacy fractional values and conventional metalness maps use a 0.5 threshold when
+baked. Default dielectric F0 is 10/255; generic metal uses 255. Blue defaults to 0
+and alpha stores emission strength in 0–254; 255 means no emission. Conventional
+emission colors/maps contribute their maximum linear channel as intensity; Lab
+uses the base color for the emitted hue.
+
+Preview reconstructs normal Z, flips DirectX normal Y for OpenGL, decodes AO,
+roughness, conductor masks and emission, and represents dielectric F0 through glTF
+physical material extensions. The eight defined conductor types use the published
+normal-incidence reflectance derived from their n/k constants, tinted by albedo.
+This is an RGB approximation of conductor Fresnel. Height/parallax, wetness/porosity
+and subsurface scattering are preserved in exported Lab channels but are not
+simulated in the preview. In-game results depend on the shader pack and MTR's
+shader integration; this application does not supply either renderer.
+
+Export includes `texture.properties` declaring `format=lab-pbr/1.3`. Base, normal
+and specular siblings have identical dimensions and share a hash of the complete
+material, keeping equal albedos with different PBR values independent. Imported Lab
+pixels retain all four channels, including alpha data, with nearest resampling when
+sizes differ. OBJ, MQO, static eye candy, rails and native BBMODEL exports use this
+pipeline. Native MTR 3 atlases copy PBR channels into the same tiles as color using
+raw pixel replacement; alpha is data and must never be composited.
+
+References: [shaderLABS LabPBR Material Standard](https://shaderlabs.org/wiki/LabPBR_Material_Standard)
+and [Iris texture format declaration](https://shaders.properties/current/how-to/pbr_standards/).

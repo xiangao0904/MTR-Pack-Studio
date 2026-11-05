@@ -345,7 +345,10 @@ pub fn to_glb_with_textures(document: &ModelDocument, image_bytes: &BTreeMap<Str
         let mut color=material.color;if let Some(opacity)=p.opacity {color[3]=opacity;}
         let mut definition = serde_json::json!({"name": material.name, "pbrMetallicRoughness":{"baseColorFactor":color,"metallicFactor":p.metalness.unwrap_or(0.0),"roughnessFactor":p.roughness.unwrap_or(0.8)},"emissiveFactor":p.emissive.unwrap_or([0.0;3]),"doubleSided":p.double_sided.unwrap_or(true),"extras":{"materialId":material.id}});
         let base=image_bytes.get(&material.id);
-        if let Some(bytes)=base { definition["pbrMetallicRoughness"]["baseColorTexture"]=serde_json::json!({"index":embed(bytes)}); }
+        let lab=crate::lab_pbr::preview(image_bytes.get(&format!("{}:labNormal",material.id)),image_bytes.get(&format!("{}:labSpecular",material.id)))?;
+        let lab_locked=crate::lab_pbr::has_lab(p);
+        let conductor_base=image_bytes.get(&format!("{}:labSpecular",material.id)).map(|s|crate::lab_pbr::conductor_base(base,s)).transpose()?.flatten();
+        if let Some(bytes)=conductor_base.as_ref().or(base) { definition["pbrMetallicRoughness"]["baseColorTexture"]=serde_json::json!({"index":embed(bytes)}); }
         let mode=p.alpha_mode.unwrap_or(if color[3]<1.0 {AlphaMode::Blend} else if base.is_some() {AlphaMode::Mask} else {AlphaMode::Opaque});
         definition["alphaMode"]=serde_json::to_value(mode).map_err(|e|e.to_string())?;
         if mode==AlphaMode::Mask {definition["alphaCutoff"]=p.alpha_cutoff.unwrap_or(0.1).into();}
@@ -354,9 +357,33 @@ pub fn to_glb_with_textures(document: &ModelDocument, image_bytes: &BTreeMap<Str
         }
         let metal=image_bytes.get(&format!("{}:metalness",material.id));let rough=image_bytes.get(&format!("{}:roughness",material.id));
         if let Some(bytes)=crate::material::pack_metallic_roughness(metal,rough)? {definition["pbrMetallicRoughness"]["metallicRoughnessTexture"]=serde_json::json!({"index":embed(&bytes)});}
+        if let Some(bytes)=lab.normal {definition["normalTexture"]=serde_json::json!({"index":embed(&bytes),"scale":1.0});}
+        if let Some(bytes)=lab.ao {definition["occlusionTexture"]=serde_json::json!({"index":embed(&bytes)});}
+        if let Some(bytes)=lab.rough_metal {
+            definition["pbrMetallicRoughness"]["metallicRoughnessTexture"]=serde_json::json!({"index":embed(&bytes)});
+            definition["pbrMetallicRoughness"]["metallicFactor"]=1.0.into();
+            definition["pbrMetallicRoughness"]["roughnessFactor"]=1.0.into();
+        }
+        if let Some(bytes)=lab.emission {
+            let mask=crate::lab_pbr::decode(&bytes)?;
+            let albedo=base.map(|b|crate::lab_pbr::decode(b)).transpose()?;
+            let emission=image::RgbaImage::from_fn(mask.width(),mask.height(),|x,y| {
+                let e=crate::lab_pbr::srgb_to_linear(mask.get_pixel(x,y)[0] as f32/255.0);
+                let a=albedo.as_ref().map(|i|i.get_pixel(x*i.width()/mask.width(),y*i.height()/mask.height()).0).unwrap_or([255;4]);
+                let mut pixel=[0,0,0,255];for c in 0..3 {pixel[c]=(crate::lab_pbr::linear_to_srgb(crate::lab_pbr::srgb_to_linear(a[c] as f32/255.0)*e)*255.0).round() as u8;} image::Rgba(pixel)
+            });
+            definition["emissiveTexture"]=serde_json::json!({"index":embed(&crate::lab_pbr::png(&emission)?)});
+            definition["emissiveFactor"]=serde_json::json!(color[..3]);
+        }
+        if let Some(bytes)=lab.reflectance {
+            definition["extensions"]=serde_json::json!({"KHR_materials_ior":{"ior":100.0},"KHR_materials_specular":{"specularFactor":1.0,"specularColorFactor":[1.0,1.0,1.0],"specularColorTexture":{"index":embed(&bytes)}}});
+        }
+        if lab_locked && definition.get("normalTexture").is_some() {definition["normalTexture"]["scale"]=1.0.into();}
+        if lab_locked {definition["extras"]["labPbr"]=true.into();}
         materials.push(definition);
     }
     let mut definition = serde_json::json!({"asset":{"version":"2.0","generator":"MTR Pack Studio"},"scene":0,"scenes":[{"nodes":(0..nodes.len()).collect::<Vec<_>>() }],"nodes":nodes,"meshes":meshes,"materials":materials,"images":images,"textures":textures,"samplers":[{"magFilter":9729,"minFilter":9987,"wrapS":10497,"wrapT":10497}],"buffers":[{"byteLength":binary.len()}],"bufferViews":views,"accessors":accessors});
+    if document.materials.iter().any(|m|m.properties.maps.contains_key(&TextureChannel::LabSpecular)) {definition["extensionsUsed"]=serde_json::json!(["KHR_materials_ior","KHR_materials_specular"]);}
     for key in ["materials", "images", "textures"] { if definition[key].as_array().is_some_and(Vec::is_empty) { definition.as_object_mut().unwrap().remove(key); } }
     if !definition.as_object().unwrap().contains_key("textures") { definition.as_object_mut().unwrap().remove("samplers"); }
     let json = serde_json::to_vec(&definition).map_err(|e| e.to_string())?;

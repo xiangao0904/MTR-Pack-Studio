@@ -137,6 +137,16 @@ fn pbr_import_bindings_and_images_survive_reopen_and_glb_conversion() {
     let mut reopened=Container::open(&path).unwrap();let restored=read_train_document(&mut reopened,0).unwrap();assert_eq!(restored,train);assert!(reopened.read_blob(&replacement).is_ok());
     let preview=asset_preview(&mut reopened,&imported.asset,&[binding]).unwrap();let edited=glb_json(&preview);assert_eq!(edited["materials"][0]["normalTexture"]["scale"],0.5);assert_eq!(edited["materials"][0]["pbrMetallicRoughness"]["metallicFactor"],1.0);
     assert_eq!(asset_preview(&mut reopened,&imported.asset,&[]).unwrap(),original);
+    let lab_spec=reopened.put_blob(&png([80,231,200,254]),"image/png").unwrap();
+    let lab_normal=reopened.put_blob(&png([100,140,160,42]),"image/png").unwrap();
+    let mut train=restored;train.carriages[0].body_models[0].material_bindings[0].properties.maps=BTreeMap::from([(TextureChannel::LabNormal,lab_normal.clone()),(TextureChannel::LabSpecular,lab_spec.clone())]);
+    write_train_document(&mut reopened,0,&train).unwrap();reopened.commit().unwrap();drop(reopened);
+    let mut reopened=Container::open(&path).unwrap();let restored=read_train_document(&mut reopened,0).unwrap();assert_eq!(restored,train);
+    assert!(reopened.read_blob(&lab_spec).is_ok()&&reopened.read_blob(&lab_normal).is_ok());
+    let preview=asset_preview(&mut reopened,&imported.asset,&restored.carriages[0].body_models[0].material_bindings).unwrap();let json=glb_json(&preview);let m=&json["materials"][0];
+    assert_eq!(m["extras"]["labPbr"],true);assert_eq!(m["normalTexture"]["scale"],1.0);
+    assert_eq!(m["pbrMetallicRoughness"]["metallicFactor"],1.0);assert_eq!(m["pbrMetallicRoughness"]["roughnessFactor"],1.0);
+    assert!(m["extensions"]["KHR_materials_specular"]["specularColorTexture"]["index"].is_number());
     drop(reopened);fs::remove_dir_all(root).unwrap();
 }
 

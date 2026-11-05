@@ -9,7 +9,7 @@ export interface ProjectData { name: string; namespace: string; description: str
 export type PlacementPreset = 'all' | 'first' | 'last' | 'odd' | 'even' | 'every' | 'custom'
 export interface CarPlacementRule { preset: PlacementPreset; every?: number; offset: number; whitelist: string; blacklist: string }
 export interface EndConfiguration { gangway: boolean; barrier: boolean }
-export type TextureChannel = 'normal' | 'metalness' | 'roughness' | 'emissive' | 'occlusion'
+export type TextureChannel = 'normal' | 'metalness' | 'roughness' | 'emissive' | 'occlusion' | 'labNormal' | 'labSpecular'
 export interface MaterialProperties { metalness?: number | null; roughness?: number | null; emissive?: [number, number, number] | null; opacity?: number | null; alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND' | null; alphaCutoff?: number | null; normalScale?: number | null; doubleSided?: boolean | null; maps?: Partial<Record<TextureChannel, string>> }
 export interface MaterialBinding { materialId: string; textureAssetId?: string; properties?: MaterialProperties }
 export interface ModelTransform { translation: [number,number,number]; rotation: [number,number,number]; scale: [number,number,number] }

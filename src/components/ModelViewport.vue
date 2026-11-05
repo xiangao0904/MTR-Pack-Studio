@@ -103,12 +103,12 @@ function applyMaterialOverrides() {
       const base=material.userData.previewBase as MaterialBase|undefined
       if(!base)continue
       const properties:MaterialProperties|undefined=asset.bindings.find(binding=>binding.materialId===material.userData.materialId)?.properties
-      material.metalness=properties?.metalness??base.metalness
-      material.roughness=properties?.roughness??base.roughness
+      material.metalness=material.userData.labPbr?base.metalness:properties?.metalness??base.metalness
+      material.roughness=material.userData.labPbr?base.roughness:properties?.roughness??base.roughness
       material.opacity=properties?.opacity??base.opacity
-      const emission=properties?.emissive??base.emissive
+      const emission=material.userData.labPbr?base.emissive:properties?.emissive??base.emissive
       material.emissive.setRGB(emission[0],emission[1],emission[2])
-      const normalScale=properties?.normalScale
+      const normalScale=material.userData.labPbr?undefined:properties?.normalScale
       material.normalScale.set(normalScale??base.normalScale[0],normalScale??base.normalScale[1])
       const mode=properties?.alphaMode
       const transparent=base.stageTransparent||(mode==='BLEND')||(!mode&&(base.transparent||material.opacity<1))

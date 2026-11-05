@@ -1,4 +1,5 @@
 mod material;
+mod lab_pbr;
 mod container;
 mod domain;
 mod model;

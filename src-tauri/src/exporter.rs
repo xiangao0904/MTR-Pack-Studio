@@ -434,7 +434,7 @@ pub fn validate(
                                 ));
                             }
                             if let Err(error) =
-                                texture_bytes(container, &asset, Some(material), layer)
+                                pbr_texture_bundle(container, &asset, Some(material), layer, false)
                             {
                                 errors.push((
                                     "materialBindings".into(),
@@ -594,15 +594,8 @@ fn build_mtr4(
     Ok(())
 }
 
-fn native_texture_bytes(container:&mut Container,asset:&AssetDefinition,material:Option<&ModelMaterial>,layer:&ModelLayer) -> Result<Vec<u8>,String> {
-    let bytes=texture_bytes(container,asset,material,layer)?;
-    if !layer.flip_texture_v {return Ok(bytes);}
-    let image=image::load_from_memory(&bytes).map_err(|e|e.to_string())?.flipv();
-    let mut output=std::io::Cursor::new(Vec::new());image.write_to(&mut output,image::ImageFormat::Png).map_err(|e|e.to_string())?;Ok(output.into_inner())
-}
-
 fn build_mtr3_bbmodel(container:&mut Container,train:&TrainDefinition,namespace:&str,only_visible:bool,custom:&mut serde_json::Map<String,Value>,files:&mut BTreeMap<String,Vec<u8>>) -> Result<(),String> {
-    let mut chunks=Vec::new();let mut property_parts=Vec::new();let(mut width,mut height)=(1u32,0u32);
+    let mut chunks=Vec::new();let mut has_pbr=false;let mut property_parts=Vec::new();let(mut width,mut height)=(1u32,0u32);
     for carriage in &train.carriages {
         let (white,black)=carriage.placement.expressions()?;
         for (layers,z) in [(&carriage.body_models,0.0),(&carriage.bogie_1_models,carriage.bogie_1_position),(&carriage.bogie_2_models,carriage.bogie_2_position)] {
@@ -613,21 +606,27 @@ fn build_mtr3_bbmodel(container:&mut Container,train:&TrainDefinition,namespace:
                 let mut model=crate::bbmodel::native_model(&container.read_blob(&asset.source_hash)?,&document.parts,layer,true)?;
                 let size=crate::bbmodel::resolution(&model)?;
                 if height.checked_add(size[1]).is_none_or(|v|v>8192){return Err("The native BBMODEL texture atlas exceeds 8192 pixels. Choose OBJ for this train.".into());}
-                let texture=native_texture_bytes(container,&asset,document.materials.first(),layer)?;
+                let (texture,lab)=pbr_texture_bundle(container,&asset,document.materials.first(),layer,true)?;
+                has_pbr |= lab.is_some();
                 let image=image::load_from_memory(&texture).map_err(|e|e.to_string())?.resize_exact(size[0],size[1],image::imageops::FilterType::Nearest).to_rgba8();
                 crate::bbmodel::shift_model(&mut model,z,height,&identity)?;
                 for part in &document.parts {
                     let(white,black)=if let Some(rule)=layer.part_rules.get(&part.id){rule.expressions()?}else{(white.clone(),black.clone())};
                     property_parts.push(mtr3_part(safe_name(&part.name),&white,&black,layer.render_stage_for(&part.id)));
                 }
-                chunks.push((model,image,height));width=width.max(size[0]);height+=size[1];
+                let lab=lab.map(|maps|maps.into_iter().map(|b|Ok(image::imageops::resize(&crate::lab_pbr::decode(&b)?,size[0],size[1],image::imageops::FilterType::Nearest))).collect::<Result<Vec<_>,String>>()).transpose()?;
+                chunks.push((model,image,lab,height));width=width.max(size[0]);height+=size[1];
             }
         }
     }
     let mut atlas=image::RgbaImage::new(width,height.max(1));let mut elements=Vec::new();let mut outliner=Vec::new();
-    for(mut model,image,y) in chunks { image::imageops::overlay(&mut atlas,&image,0,y as i64);elements.extend(model["elements"].as_array_mut().ok_or("Missing native elements")?.drain(..));outliner.extend(model["outliner"].as_array_mut().ok_or("Missing native groups")?.drain(..)); }
+    let mut normal_atlas=image::RgbaImage::from_pixel(width,height.max(1),image::Rgba([128,128,255,255]));
+    let mut spec_atlas=image::RgbaImage::from_pixel(width,height.max(1),image::Rgba([51,10,0,255]));
+    for(mut model,image,lab,y) in chunks { if let Some(lab)=lab {image::imageops::replace(&mut normal_atlas,&lab[0],0,y as i64);image::imageops::replace(&mut spec_atlas,&lab[1],0,y as i64);} image::imageops::overlay(&mut atlas,&image,0,y as i64);elements.extend(model["elements"].as_array_mut().ok_or("Missing native elements")?.drain(..));outliner.extend(model["outliner"].as_array_mut().ok_or("Missing native groups")?.drain(..)); }
     let mut bytes=std::io::Cursor::new(Vec::new());image::DynamicImage::ImageRgba8(atlas).write_to(&mut bytes,image::ImageFormat::Png).map_err(|e|e.to_string())?;
-    let texture_path=format!("textures/vehicle/{}.png",blake3::hash(bytes.get_ref()).to_hex());files.insert(format!("assets/{namespace}/{texture_path}"),bytes.into_inner());
+    let lab=if has_pbr {Some([crate::lab_pbr::png(&normal_atlas)?,crate::lab_pbr::png(&spec_atlas)?])}else{None};
+    let name=store_texture_bundle(files,&format!("assets/{namespace}/textures/vehicle"),bytes.into_inner(),lab)?;
+    let texture_path=format!("textures/vehicle/{name}");
     let base=export_base(&train.export_id,"native_bbmodel");
     files.insert(format!("assets/{namespace}/models/vehicle/{base}.bbmodel"),pretty(&json!({"meta":{"format_version":"4.10","model_format":"modded_entity","box_uv":true},"resolution":{"width":width,"height":height.max(1)},"elements":elements,"outliner":outliner,"textures":[{"id":"0","name":texture_path.rsplit('/').next().unwrap(),"relative_path":format!("../../{texture_path}")}],"animations":[]}))?);
     files.insert(format!("assets/{namespace}/properties/vehicle/{base}.json"),pretty(&json!({"transport_mode":"train","length":train.carriages[0].length,"width":train.carriages[0].width,"door_max":0,"parts":property_parts}))?);
@@ -659,9 +658,9 @@ fn write_mtr4_layers(
             if document.parts.is_empty() { continue; }
             let suffix = format!("{base}_{slot}_{layer_index}_bbmodel");
             let mut native = crate::bbmodel::native_model(&container.read_blob(&asset.source_hash)?, &document.parts, layer, false)?;
-            let bytes = native_texture_bytes(container, &asset, document.materials.first(), layer)?;
-            let texture_path = format!("textures/vehicle/{}.png",blake3::hash(&bytes).to_hex());
-            files.insert(format!("assets/{namespace}/{texture_path}"),bytes);
+            let (bytes,maps)=pbr_texture_bundle(container,&asset,document.materials.first(),layer,true)?;
+            let name=store_texture_bundle(files,&format!("assets/{namespace}/textures/vehicle"),bytes,maps)?;
+            let texture_path = format!("textures/vehicle/{name}");
             native["textures"]=json!([{"id":"0","name":texture_path.rsplit('/').next().unwrap(),"relative_path":format!("../../{texture_path}")}]);
             files.insert(format!("assets/{namespace}/models/vehicle/{suffix}.bbmodel"), pretty(&native)?);
             files.insert(format!("assets/{namespace}/properties/vehicle/{suffix}.json"),pretty(&mtr4_properties(&document,layer))?);
@@ -878,7 +877,7 @@ fn validate_eye_candies(container: &mut Container, eye_candies: &[EyeCandyDefini
                 }
                 for material in &doc.materials {
                     if material.color.iter().any(|v| !v.is_finite()) { return Err("Eye candy material has an invalid color.".into()); }
-                    texture_bytes(container, &asset, Some(material), layer)?;
+                    pbr_texture_bundle(container, &asset, Some(material), layer, false)?;
                 }
                 if !layer.part_rules.is_empty() { return Err("Train placement rules cannot be applied to eye candy models.".into()); }
                 Ok(())
@@ -956,7 +955,7 @@ fn validate_rails(container: &mut Container, rails: &[RailDefinition], options: 
                 }
                 for material in &doc.materials {
                     if material.color.iter().any(|v| !v.is_finite()) { return Err("Rail material has an invalid color.".into()); }
-                    texture_bytes(container, &asset, Some(material), layer)?;
+                    pbr_texture_bundle(container, &asset, Some(material), layer, false)?;
                 }
                 if !layer.part_rules.is_empty() { return Err("Train placement rules cannot be applied to rail models.".into()); }
                 Ok(())
@@ -1010,10 +1009,8 @@ fn write_static_model(container: &mut Container, layers: &[ModelLayer], namespac
         }
         let offset = combined.materials.len();
         for material in &doc.materials {
-            let bytes = texture_bytes(container, &asset, Some(material), layer)?;
-            let texture_name = format!("{}.png", blake3::hash(&bytes).to_hex());
-            files.insert(format!("assets/{namespace}/{directory}/{texture_name}"), bytes);
-            textures.push(texture_name);
+            let (bytes,maps)=pbr_texture_bundle(container,&asset,Some(material),layer,false)?;
+            textures.push(store_texture_bundle(files,&format!("assets/{namespace}/{directory}"),bytes,maps)?);
         }
         let flip = doc.flip_v(layer.flip_texture_v);
         for part in &mut doc.parts {
@@ -1370,11 +1367,51 @@ fn write_texture(
     layer: &ModelLayer,
     files: &mut BTreeMap<String, Vec<u8>>,
 ) -> Result<String, String> {
-    let bytes = texture_bytes(container, asset, material, layer)?;
-    let hash = blake3::hash(&bytes).to_hex();
-    let path = format!("textures/vehicle/{hash}.png");
-    files.insert(format!("assets/{namespace}/{path}"), bytes);
-    Ok(format!("{namespace}:{path}"))
+    let (bytes, maps) = pbr_texture_bundle(container, asset, material, layer, false)?;
+    let path=store_texture_bundle(files,&format!("assets/{namespace}/textures/vehicle"),bytes,maps)?;
+    Ok(format!("{namespace}:textures/vehicle/{path}"))
+}
+
+/// Resolve overrides as blob hashes and source channels as dependency filenames.
+fn pbr_texture_bundle(container:&mut Container,asset:&AssetDefinition,material:Option<&ModelMaterial>,layer:&ModelLayer,flip:bool)->Result<(Vec<u8>,Option<[Vec<u8>;2]>),String> {
+    let mut base=crate::lab_pbr::decode(&texture_bytes(container,asset,material,layer)?)?;
+    let mut properties=material.map(|m|m.properties.clone()).unwrap_or_default();
+    let binding=material.and_then(|m|layer.material_bindings.iter().find(|b|b.material_id==m.id));
+    if let Some(b)=binding {properties.overlay(&b.properties);}
+    let mut maps=BTreeMap::new();
+    for (channel,name) in &properties.maps {
+        let hash=if let Some(hash)=binding.and_then(|b|b.properties.maps.get(channel)){hash.clone()}else {
+            let normalized=name.replace('\\',"/");let filename=normalized.rsplit('/').next().unwrap_or(name);
+            let exact=asset.dependencies.iter().find(|d|d.name.replace('\\',"/").eq_ignore_ascii_case(&normalized));
+            let matches:Vec<_>=asset.dependencies.iter().filter(|d|d.name.rsplit(['/', '\\']).next().is_some_and(|n|n.eq_ignore_ascii_case(filename))).collect();
+            exact.or_else(||if matches.len()==1 {Some(matches[0])}else{None}).ok_or_else(||format!("PBR texture {name} is missing or ambiguous."))?.hash.clone()
+        };
+        maps.insert(*channel,container.read_blob(&hash)?);
+    }
+    // A solid base color inherits the detail map resolution. Every sibling has identical dimensions.
+    let mut size=(base.width(),base.height());
+    for bytes in maps.values(){let i=crate::lab_pbr::decode(bytes)?;size.0=size.0.max(i.width());size.1=size.1.max(i.height());}
+    if size.0 as u64*size.1 as u64*4>256*1024*1024 {return Err("PBR texture dimensions exceed the image memory limit.".into());}
+    base=image::imageops::resize(&base,size.0,size.1,image::imageops::FilterType::Nearest);
+    let mut lab=crate::lab_pbr::encode(&properties,&maps,size)?;
+    if flip && layer.flip_texture_v {
+        base=image::imageops::flip_vertical(&base);
+        if let Some(maps)=lab.as_mut(){for bytes in maps { *bytes=crate::lab_pbr::png(&image::imageops::flip_vertical(&crate::lab_pbr::decode(bytes)?))?; }}
+    }
+    Ok((crate::lab_pbr::png(&base)?,lab))
+}
+
+fn store_texture_bundle(files:&mut BTreeMap<String,Vec<u8>>,directory:&str,base:Vec<u8>,lab:Option<[Vec<u8>;2]>)->Result<String,String> {
+    let mut hash=blake3::Hasher::new();hash.update(&base);
+    if let Some(maps)=&lab {for bytes in maps {hash.update(&(bytes.len() as u64).to_le_bytes());hash.update(bytes);}}
+    let stem=hash.finalize().to_hex().to_string();
+    files.insert(format!("{directory}/{stem}.png"),base);
+    if let Some([normal,spec])=lab {
+        files.insert(format!("{directory}/{stem}_n.png"),normal);
+        files.insert(format!("{directory}/{stem}_s.png"),spec);
+        files.insert("texture.properties".into(),b"format=lab-pbr/1.3\n".to_vec());
+    }
+    Ok(format!("{stem}.png"))
 }
 
 fn solid_png(color: [f32; 4]) -> Result<Vec<u8>, String> {
@@ -2142,6 +2179,54 @@ mod tests {
         let path=fixture.root.join("visible-obj.zip");export(&mut fixture.container,&path,&opt).unwrap();let files=unzip(&path);
         assert!(!files.keys().any(|path|path.ends_with(".bbmodel")));fixture.finish();
     }
+    #[test]
+    fn lab_pbr_exports_use_material_identity_and_preserve_imported_channels() {
+        use crate::material::{MaterialProperties,TextureChannel as C};
+        let mut fixture=Fixture::new();
+        let (asset,doc)=load_asset(&mut fixture.container,"asset").unwrap();
+        let mut layer=fixture.train.carriages[0].body_models[0].clone();
+        layer.material_bindings.push(crate::domain::MaterialBinding{material_id:doc.materials[0].id.clone(),texture_asset_id:None,properties:MaterialProperties{roughness:Some(0.25),metalness:Some(1.0),..Default::default()}});
+        let mut files=BTreeMap::new();
+        let a=write_texture(&mut fixture.container,&asset,Some(&doc.materials[0]),"test","a",&layer,&mut files).unwrap();
+        layer.material_bindings[0].properties.roughness=Some(0.9);
+        let b=write_texture(&mut fixture.container,&asset,Some(&doc.materials[0]),"test","b",&layer,&mut files).unwrap();
+        assert_ne!(a,b,"Different PBR materials must not overwrite siblings of the same albedo");
+        for resource in [&a,&b] {let base=resource_path(resource);let spec=base.replace(".png","_s.png");let n=base.replace(".png","_n.png");assert_eq!(crate::lab_pbr::decode(&files[&base]).unwrap().dimensions(),crate::lab_pbr::decode(&files[&spec]).unwrap().dimensions());assert!(files.contains_key(&n));}
+        let spec=crate::lab_pbr::png(&image::RgbaImage::from_pixel(2,2,image::Rgba([60,231,200,254]))).unwrap();
+        let normal=crate::lab_pbr::png(&image::RgbaImage::from_pixel(2,2,image::Rgba([100,140,180,22]))).unwrap();
+        let sh=fixture.container.put_blob(&spec,"image/png").unwrap();let nh=fixture.container.put_blob(&normal,"image/png").unwrap();
+        layer.material_bindings[0].properties.maps=BTreeMap::from([(C::LabSpecular,sh),(C::LabNormal,nh)]);
+        fixture.train.carriages[0].body_models[0]=layer;fixture.save();
+        for option in [options("mtr4","obj"),options("mtr4","mqo"),options("mtr3_nte","obj")] {
+            let path=fixture.root.join("lab.zip");export(&mut fixture.container,&path,&option).unwrap();let files=unzip(&path);
+            assert_eq!(files["texture.properties"],b"format=lab-pbr/1.3\n");
+            assert!(files.iter().any(|(p,b)|p.ends_with("_s.png")&&crate::lab_pbr::decode(b).unwrap().get_pixel(0,0).0==[60,231,200,254]));
+            assert!(files.iter().any(|(p,b)|p.ends_with("_n.png")&&crate::lab_pbr::decode(b).unwrap().get_pixel(0,0).0==[100,140,180,22]));
+            for (p,b) in &files {if p.ends_with(".mtl") {let m=std::str::from_utf8(b).unwrap();assert!(!m.contains("\nPr ")&&!m.contains("\nPm "));}}
+        }
+        fixture.finish();
+    }
+
+    #[test]
+    fn native_bbmodel_lab_atlas_follows_color_uv_layout() {
+        let mut fixture=Fixture::new();bbmodel_fixture(&mut fixture);
+        let layer=&mut fixture.train.carriages[0].bogie_1_models[0];
+        layer.material_bindings.push(crate::domain::MaterialBinding{material_id:"material-0".into(),texture_asset_id:None,properties:crate::material::MaterialProperties{roughness:Some(0.25),..Default::default()}});
+        // Use the imported material's actual stable id.
+        let (_,doc)=load_asset(&mut fixture.container,&fixture.train.carriages[0].bogie_1_models[0].asset_id).unwrap();
+        fixture.train.carriages[0].bogie_1_models[0].material_bindings[0].material_id=doc.materials[0].id.clone();
+        let spec=crate::lab_pbr::png(&image::RgbaImage::from_pixel(2,2,image::Rgba([60,231,200,0]))).unwrap();
+        let hash=fixture.container.put_blob(&spec,"image/png").unwrap();
+        fixture.train.carriages[0].bogie_1_models[0].material_bindings[0].properties.maps.insert(crate::material::TextureChannel::LabSpecular,hash);
+        fixture.save();
+        for target in ["mtr4","mtr3_nte"] {
+            let path=fixture.root.join("native-lab.zip");let option=ExportOptions{bbmodel_format:"bbmodel".into(),..options(target,"obj")};export(&mut fixture.container,&path,&option).unwrap();
+            let files=unzip(&path);let (name,bytes)=files.iter().find(|(p,b)|p.ends_with("_s.png")&&crate::lab_pbr::decode(b).unwrap().pixels().any(|p|p.0==[60,231,200,0])).unwrap();
+            let spec=crate::lab_pbr::decode(bytes).unwrap();let base=crate::lab_pbr::decode(&files[&name.replace("_s.png",".png")]).unwrap();assert_eq!(base.dimensions(),spec.dimensions());
+        }
+        fixture.finish();
+    }
+
     fn options(target: &str, format: &str) -> ExportOptions {
         ExportOptions {
             target: target.into(),
